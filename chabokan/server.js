@@ -169,25 +169,15 @@ app.post("/api/lms/sessions", authenticateToken, requireRole("admin", "teacher")
   res.status(201).json(session);
 });
 
-function getFormattedInviteLink(roomId, req) {
+function getFormattedInviteLink(roomId) {
   try {
-    const webRow = db.prepare("SELECT value FROM server_config WHERE key = 'web_domain'").get();
-    const configWeb = (webRow?.value || "").trim();
-
-    // 1. If web domain is set (e.g. nodejs-jp5lts.chbkn.dev), strictly use it
-    if (configWeb) {
-      const cleanWeb = configWeb.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-      return `https://${cleanWeb}/?room=${roomId}`;
-    }
-
-    // 2. Otherwise extract request host (ignoring services.irn18 or internal cluster if forwarded)
-    if (req) {
-      const forwardedHost = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
-      if (forwardedHost) {
-        let clean = forwardedHost.split(":")[0].trim();
-        // If it's the internal cluster host, fallback to generic chbkn domain or origin
-        return `https://${clean}/?room=${roomId}`;
-      }
+    const hostRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_host'").get();
+    const portRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_ws_port'").get();
+    const host = hostRow?.value || "";
+    const port = portRow?.value || "3000";
+    const portStr = port && port !== "80" && port !== "443" ? `:${port}` : "";
+    if (host) {
+      return `http://${host}${portStr}/?room=${roomId}`;
     }
   } catch (e) {}
   return `/?room=${roomId}`;
@@ -225,7 +215,7 @@ app.post("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req,
       id: roomId,
       title: cleanTitle,
       transport: transportConfig,
-      inviteLink: getFormattedInviteLink(roomId, req),
+      inviteLink: getFormattedInviteLink(roomId),
       createdAt: now,
     },
   });
@@ -241,7 +231,7 @@ app.get("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req, 
       id: r.id,
       title: r.title,
       transport,
-      inviteLink: getFormattedInviteLink(r.id, req),
+      inviteLink: getFormattedInviteLink(r.id),
       activeUsers: activeRoom ? Object.keys(activeRoom.users).length : 0,
       createdAt: r.created_at,
     };
@@ -265,35 +255,50 @@ app.get("/api/config", (req, res) => {
   for (const row of rows) {
     config[row.key] = row.value;
   }
+  const host = config.public_host || req.hostname || "localhost";
+  const wsPort = parseInt(config.public_ws_port || "3000", 10);
+  const udpPort = parseInt(config.public_udp_port || "3001", 10);
+  const stunServers = (config.stun_servers || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   res.json({
-    webDomain: config.web_domain || "nodejs-jp5lts.chbkn.dev",
-    streamHost: config.stream_host || "services.irn18.chabokan.net",
-    streamWsPort: config.stream_ws_port ? parseInt(config.stream_ws_port, 10) : 17833,
-    streamUdpPort: config.stream_udp_port ? parseInt(config.stream_udp_port, 10) : 3001,
+    publicHost: host,
+    publicWsPort: wsPort,
+    publicUdpPort: udpPort,
+    stunServers,
   });
 });
 
 app.post("/api/config", authenticateToken, requireRole("admin"), (req, res) => {
-  const { webDomain, streamHost, streamWsPort, streamUdpPort } = req.body;
+  const { publicHost, publicWsPort, publicUdpPort, stunServers } = req.body;
   const updateStmt = db.prepare("INSERT OR REPLACE INTO server_config (key, value) VALUES (?, ?)");
 
-  if (webDomain !== undefined) updateStmt.run("web_domain", sanitizeText(webDomain, 200));
-  if (streamHost !== undefined) updateStmt.run("stream_host", sanitizeText(streamHost, 200));
-  if (streamWsPort !== undefined) updateStmt.run("stream_ws_port", String(parseInt(streamWsPort, 10) || 3000));
-  if (streamUdpPort !== undefined) updateStmt.run("stream_udp_port", String(parseInt(streamUdpPort, 10) || 3001));
+  if (publicHost !== undefined) updateStmt.run("public_host", sanitizeText(publicHost, 200));
+  if (publicWsPort !== undefined) updateStmt.run("public_ws_port", String(parseInt(publicWsPort, 10) || 3000));
+  if (publicUdpPort !== undefined) updateStmt.run("public_udp_port", String(parseInt(publicUdpPort, 10) || 3001));
+  if (stunServers !== undefined) {
+    const stunStr = Array.isArray(stunServers) ? stunServers.join(",") : String(stunServers);
+    updateStmt.run("stun_servers", sanitizeText(stunStr, 1000));
+  }
 
-  res.json({ success: true, message: "تنظیمات شبکه چابکان با موفقیت ذخیره شد." });
+  res.json({ success: true, message: "تنظیمات سرور چابکان با موفقیت ذخیره شد." });
 });
 
 // Test network & port connectivity for Chabokan configuration
 app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req, res) => {
-  const { streamHost, streamWsPort, streamUdpPort } = req.body;
-  const targetHost = (streamHost && streamHost.trim()) || "127.0.0.1";
-  const wsPort = parseInt(streamWsPort, 10);
-  const udpPort = parseInt(streamUdpPort, 10);
+  const { publicHost, publicWsPort, publicUdpPort } = req.body;
+  const targetHost = (publicHost && publicHost.trim()) || "";
+  const wsPort = parseInt(publicWsPort, 10);
+  const udpPort = parseInt(publicUdpPort, 10);
+
+  if (!targetHost) {
+    return res.status(400).json({ error: "لطفاً ابتدا دامنه یا آدرس سرور چابکان را وارد کنید." });
+  }
 
   if (isNaN(wsPort) || wsPort < 1 || wsPort > 65535) {
-    return res.status(400).json({ error: "شماره پورت ارتباطی وب‌سوکت نامعتبر است." });
+    return res.status(400).json({ error: "شماره پورت وب نامعتبر است." });
   }
 
   const results = {
@@ -308,7 +313,7 @@ app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req
 
   const startTime = Date.now();
 
-  // 1. Strictly test TCP socket connectivity to targetHost:wsPort
+  // 1. Strictly test TCP socket connectivity to targetHost:wsPort (No fallback to 127.0.0.1!)
   try {
     const net = require("net");
     await new Promise((resolve, reject) => {
@@ -343,7 +348,7 @@ app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req
         const timer = setTimeout(() => {
           client.close();
           results.udpReachable = false;
-          results.udpError = `پاسخی از پورت UDP ${udpPort} دریافت نشد`;
+          results.udpError = `پاسخی از پورت UDP ${udpPort} روی ${targetHost} دریافت نشد`;
           resolve();
         }, 1500);
 

@@ -151,13 +151,24 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   }, []);
 
   const getRoomInviteLink = (roomId: string) => {
-    // If public domain is provided, always use standard HTTPS link (port 443)
+    // 1. If admin configured a public domain in network settings, use it
     if (configHost && configHost.trim()) {
       const cleanHost = configHost.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
       const portPart = configWsPort && configWsPort !== 80 && configWsPort !== 443 ? `:${configWsPort}` : "";
       return `https://${cleanHost}${portPart}/?room=${roomId}`;
     }
-    // Fallback to origin without external container forwarding ports
+
+    // 2. If accessing via Chabokan public domain (e.g. *.chbkn.dev or any clean domain without internal ports)
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol; // usually https:
+    const port = window.location.port;
+
+    // Filter out internal docker/container forwarding ports (e.g. 17833, 3000, etc.)
+    if (port && port !== "80" && port !== "443" && (hostname.includes("chabokan.net") || hostname.includes("chbkn.dev"))) {
+      // Strip internal cluster port!
+      return `${protocol}//${hostname}/?room=${roomId}`;
+    }
+
     return `${window.location.origin}/?room=${roomId}`;
   };
 

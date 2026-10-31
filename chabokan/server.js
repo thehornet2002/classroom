@@ -193,8 +193,12 @@ function getFormattedInviteLink(roomId, req) {
     }
 
     if (host) {
-      // Remove any trailing slash or protocol prefixes
-      const cleanHost = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      // Remove any internal cluster port like :17833 or :3000 if host contains it
+      let cleanHost = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      if (cleanHost.includes("chabokan.net") || cleanHost.includes("chbkn.dev")) {
+        cleanHost = cleanHost.split(":")[0];
+        portStr = ""; // Always standard 443 for chabokan domains
+      }
       return `${proto}//${cleanHost}${portStr}/?room=${roomId}`;
     }
   } catch (e) {}

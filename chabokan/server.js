@@ -12,6 +12,7 @@ const {
   createUser,
   listUsers,
   deleteUser,
+  updatePassword,
   getUserDashboard,
   createCourse,
   createSession,
@@ -98,6 +99,20 @@ app.post("/api/auth/login", (req, res) => {
 
 app.get("/api/auth/me", authenticateToken, (req, res) => {
   res.json({ user: req.user });
+});
+
+// Host / Admin password change endpoint
+app.post("/api/auth/change-password", authenticateToken, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: "رمز عبور فعلی و رمز عبور جدید الزامی هستند." });
+  }
+
+  const result = updatePassword(req.user.id, currentPassword, newPassword);
+  if (result.error) {
+    return res.status(400).json({ error: result.error });
+  }
+  res.json(result);
 });
 
 // Admin / Teacher User Management

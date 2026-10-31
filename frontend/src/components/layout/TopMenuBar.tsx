@@ -28,6 +28,7 @@ import {
   Download,
   Film,
   PowerOff,
+  KeyRound,
 } from "lucide-react";
 import { useRoomStore } from "../../stores/roomStore";
 import { TransportConfig, UserStatus, WSMessage } from "../../types";
@@ -67,6 +68,11 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   const [recordingsModalOpen, setRecordingsModalOpen] = useState(false);
   const [recordingsList, setRecordingsList] = useState<any[]>([]);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordStatus, setPasswordStatus] = useState<{ success?: boolean; message?: string } | null>(null);
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   const { isRecording, recordingTimeStr, startRecording, stopRecording } = useMeetingRecorder(sendMessage);
 
@@ -107,6 +113,40 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
     };
     setTransport(nextTransport);
     sendMessage({ type: "UPDATE_TRANSPORT", transport: nextTransport });
+  };
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentPassword || !newPassword) return;
+
+    setPasswordLoading(true);
+    setPasswordStatus(null);
+    try {
+      const token = localStorage.getItem("classroom_admin_token") || "";
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "خطا در تغییر رمز عبور");
+      }
+      setPasswordStatus({ success: true, message: data.message || "رمز عبور با موفقیت تغییر یافت." });
+      setCurrentPassword("");
+      setNewPassword("");
+      setTimeout(() => {
+        setPasswordModalOpen(false);
+        setPasswordStatus(null);
+      }, 1800);
+    } catch (err: any) {
+      setPasswordStatus({ success: false, message: err.message || "خطا در تغییر رمز عبور" });
+    } finally {
+      setPasswordLoading(false);
+    }
   };
 
   const isHost = currentUser?.role === "host";
@@ -190,6 +230,20 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 <Film className="w-3.5 h-3.5 text-blue-400" />
                 <span>ویدیوهای ضبط‌شده (Recordings)</span>
               </button>
+
+              {isHost && (
+                <button
+                  onClick={() => {
+                    setMeetingMenuOpen(false);
+                    setPasswordStatus(null);
+                    setPasswordModalOpen(true);
+                  }}
+                  className="w-full text-right px-3 py-1.5 hover:bg-adobe-border flex items-center gap-2 text-amber-300"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                  <span>تغییر رمز عبور مدیر (Password)</span>
+                </button>
+              )}
 
               <div className="border-t border-adobe-border my-1" />
 
@@ -629,6 +683,81 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                 بستن
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Password Change Modal for Host */}
+      {passwordModalOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50 text-right select-none" dir="rtl">
+          <div className="w-full max-w-sm bg-adobe-pod border border-adobe-border rounded-xl shadow-2xl p-5 flex flex-col gap-3">
+            <div className="flex items-center justify-between border-b border-adobe-border pb-2">
+              <div className="flex items-center gap-1.5 font-bold text-white text-xs">
+                <KeyRound className="w-4 h-4 text-amber-400" />
+                <span>تغییر رمز عبور مدیر (Host Password)</span>
+              </div>
+              <button
+                onClick={() => setPasswordModalOpen(false)}
+                className="p-1 rounded text-adobe-muted hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {passwordStatus && (
+              <div
+                className={`p-2.5 rounded-lg text-xs font-semibold ${
+                  passwordStatus.success
+                    ? "bg-emerald-950/80 border border-emerald-600 text-emerald-300"
+                    : "bg-rose-950/80 border border-rose-600 text-rose-300"
+                }`}
+              >
+                {passwordStatus.message}
+              </div>
+            )}
+
+            <form onSubmit={handlePasswordChange} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-adobe-muted mb-1 text-[11px] font-semibold">رمز عبور فعلی:</label>
+                <input
+                  type="password"
+                  required
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="رمز فعلی خود را وارد کنید"
+                  className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white focus:outline-none focus:border-adobe-accent text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-adobe-muted mb-1 text-[11px] font-semibold">رمز عبور جدید:</label>
+                <input
+                  type="password"
+                  required
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="حداقل ۴ کاراکتر"
+                  className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white focus:outline-none focus:border-adobe-accent text-xs"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-adobe-border">
+                <button
+                  type="button"
+                  onClick={() => setPasswordModalOpen(false)}
+                  className="px-3 py-1.5 rounded bg-adobe-bar hover:bg-adobe-border text-adobe-muted hover:text-white"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  disabled={passwordLoading}
+                  className="px-4 py-1.5 bg-adobe-accent hover:bg-blue-600 text-white font-bold rounded shadow transition disabled:opacity-50"
+                >
+                  {passwordLoading ? "در حال ذخیره..." : "ثبت رمز جدید"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

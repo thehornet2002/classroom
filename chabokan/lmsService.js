@@ -161,11 +161,33 @@ function updateSessionStatus(sessionId, status) {
   db.prepare("UPDATE class_sessions SET status = ? WHERE id = ?").run(status, sessionId);
 }
 
+// Update user password
+function updatePassword(userId, currentPassword, newPassword) {
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user) {
+    return { error: "کاربر یافت نشد." };
+  }
+
+  const isMatch = bcrypt.compareSync(currentPassword, user.password_hash);
+  if (!isMatch) {
+    return { error: "رمز عبور فعلی اشتباه است." };
+  }
+
+  if (!newPassword || newPassword.length < 4) {
+    return { error: "رمز عبور جدید باید حداقل ۴ کاراکتر باشد." };
+  }
+
+  const newHash = bcrypt.hashSync(newPassword, 10);
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, userId);
+  return { success: true, message: "رمز عبور با موفقیت به‌روزرسانی شد." };
+}
+
 module.exports = {
   loginUser,
   createUser,
   listUsers,
   deleteUser,
+  updatePassword,
   getUserDashboard,
   createCourse,
   createSession,

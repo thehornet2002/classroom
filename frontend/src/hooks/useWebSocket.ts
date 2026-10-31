@@ -135,7 +135,7 @@ export function useWebSocket(url: string | null) {
               break;
             }
 
-            case "ROOM_STATE":
+            case "ROOM_STATE": {
               setAdmission(true);
               setRoomState(msg.state);
               if (msg.state.roomId) {
@@ -145,7 +145,18 @@ export function useWebSocket(url: string | null) {
                   localStorage.setItem(`classroom_admit_${msg.state.roomId}`, lastToken);
                 }
               }
+
+              // Automatic peer connection recovery on reconnect
+              const { isMicOn, isCamOn, isScreenSharing, currentUser } = useRoomStore.getState();
+              if ((isMicOn || isCamOn || isScreenSharing) && currentUser) {
+                for (const peerId of Object.keys(msg.state.users)) {
+                  if (peerId !== currentUser.id && msg.state.users[peerId].admitted) {
+                    webrtc.connectToPeer(peerId);
+                  }
+                }
+              }
               break;
+            }
 
             case "USER_JOINED":
               updateUser(msg.user);

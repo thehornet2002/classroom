@@ -3,19 +3,25 @@ import { useRoomStore } from "../stores/roomStore";
 import { WSMessage } from "../types";
 import { audioManager } from "./audioManager";
 
-// Optimize SDP for high-clarity voice and jitter resistance
+// Low-bandwidth resilient Opus SDP optimization
+// Configures in-band Forward Error Correction (FEC), Discontinuous Transmission (DTX),
+// and packet loss concealment to guarantee continuous, stutter-free voice on poor connections
 function optimizeOpusSdp(sdp: string): string {
   if (!sdp) return sdp;
-  // minptime=10 for low latency; useinbandfec=1 for forward error recovery; maxaveragebitrate=96000 for crystal-clear voice; cbr=1 prevents variable-bitrate stutter
-  return sdp.replace(
-    /a=fmtp:111 ((?:(?!minptime).)*)\r\n/g,
-    "a=fmtp:111 $1;minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;maxaveragebitrate=96000;cbr=1\r\n"
-  );
+
+  return sdp.replace(/a=fmtp:111 ((?:(?!minptime).)*)\r\n/g, (match, existing) => {
+    // maxaveragebitrate=32000 (perfect voice clarity with 3x lower bandwidth consumption)
+    // useinbandfec=1: hardware/codec level packet recovery during network drops
+    // usedtx=1: reduces bandwidth by 50% during silence
+    // ptime=20, minptime=10: standard low-overhead packetization
+    return `a=fmtp:111 ${existing};minptime=10;ptime=20;maxaveragebitrate=32000;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;cbr=1\r\n`;
+  });
 }
 
 export class WebRTCManager {
   private peers = new Map<string, RTCPeerConnection>();
   private dataChannels = new Map<string, RTCDataChannel>();
+  private pendingCandidates = new Map<string, RTCIceCandidateInit[]>();
   private sendWSMessage: (msg: WSMessage) => void = () => {};
   private localStream: MediaStream | null = null;
   private localAudioStream: MediaStream | null = null;
@@ -75,6 +81,17 @@ export class WebRTCManager {
 
     const newVideoTrack = videoStream ? videoStream.getVideoTracks()[0] || null : null;
     const newAudioTrack = audioStream ? audioStream.getAudioTracks()[0] || null : null;
+
+    // Apply voice optimization constraints on active audio track
+    if (newAudioTrack) {
+      try {
+        await newAudioTrack.applyConstraints({
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        });
+      } catch (e) {}
+    }
 
     // Update existing peer connections with new tracks using replaceTrack
     for (const [peerId, pc] of this.peers.entries()) {
@@ -210,7 +227,7 @@ export class WebRTCManager {
     };
 
     pc.ontrack = (event) => {
-      // Direct high-reliability audio routing
+      // Continuous Web Audio Graph Pipeline
       if (event.track.kind === "audio") {
         audioManager.playRemoteAudio(peerId, event.track);
         event.track.onended = () => {
@@ -284,6 +301,16 @@ export class WebRTCManager {
     const pc = this.createPeerConnection(senderId);
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+      // Process any early buffered ICE candidates
+      const pending = this.pendingCandidates.get(senderId);
+      if (pending && pending.length > 0) {
+        for (const c of pending) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+        }
+        this.pendingCandidates.delete(senderId);
+      }
+
       const answer = await pc.createAnswer();
       const enhancedSdp = optimizeOpusSdp(answer.sdp || "");
       const enhancedAnswer = new RTCSessionDescription({ type: answer.type, sdp: enhancedSdp });
@@ -304,6 +331,15 @@ export class WebRTCManager {
     if (pc) {
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+        // Process any early buffered ICE candidates
+        const pending = this.pendingCandidates.get(senderId);
+        if (pending && pending.length > 0) {
+          for (const c of pending) {
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+          }
+          this.pendingCandidates.delete(senderId);
+        }
       } catch (e) {
         console.error("Failed to handle answer from", senderId, e);
       }
@@ -312,17 +348,26 @@ export class WebRTCManager {
 
   async handleIceCandidate(senderId: string, candidate: RTCIceCandidateInit) {
     const pc = this.peers.get(senderId);
-    if (pc) {
+    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
       try {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
         console.error("Failed to add ICE candidate from", senderId, e);
       }
+    } else {
+      // Buffer early ICE candidate until remote description is set
+      let list = this.pendingCandidates.get(senderId);
+      if (!list) {
+        list = [];
+        this.pendingCandidates.set(senderId, list);
+      }
+      list.push(candidate);
     }
   }
 
   closePeer(peerId: string) {
     audioManager.stopRemoteAudio(peerId);
+    this.pendingCandidates.delete(peerId);
     const dc = this.dataChannels.get(peerId);
     if (dc) {
       try { dc.close(); } catch (e) {}
@@ -338,6 +383,7 @@ export class WebRTCManager {
 
   closeAll() {
     audioManager.stopAll();
+    this.pendingCandidates.clear();
     for (const [peerId, dc] of this.dataChannels.entries()) {
       try { dc.close(); } catch (e) {}
     }

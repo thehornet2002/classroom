@@ -285,9 +285,10 @@ async function runAllTests() {
 
     // Update config with custom forwarded UDP port
     const postData = JSON.stringify({
-      publicHost: "test.chabokan.app",
-      publicWsPort: 3000,
-      publicUdpPort: 32145,
+      webDomain: "test.chabokan.app",
+      streamHost: "services.irn18.chabokan.net",
+      streamWsPort: 3000,
+      streamUdpPort: 32145,
     });
 
     const updateRes = await new Promise((resolve, reject) => {
@@ -323,8 +324,8 @@ async function runAllTests() {
       });
     });
 
-    assert.strictEqual(configData.publicUdpPort, 32145);
-    assert.strictEqual(configData.publicHost, "test.chabokan.app");
+    assert.strictEqual(configData.streamUdpPort, 32145);
+    assert.strictEqual(configData.webDomain, "test.chabokan.app");
   });
 
   // 10. Recordings API Endpoint
@@ -351,9 +352,9 @@ async function runAllTests() {
     const adminToken = generateToken({ id: "u_admin", username: "admin", name: "مدیر", role: "admin" });
 
     const postData = JSON.stringify({
-      publicHost: "127.0.0.1",
-      publicWsPort: port,
-      publicUdpPort: 3001,
+      streamHost: "127.0.0.1",
+      streamWsPort: port,
+      streamUdpPort: 3001,
     });
 
     const testRes = await new Promise((resolve, reject) => {

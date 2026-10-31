@@ -107,12 +107,12 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   const [activeAdminRooms, setActiveAdminRooms] = useState<ManagedRoomItem[]>([]);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // Chabokan Network Configuration state (Requirement 4)
+  // Chabokan Dual-Host Network Configuration state
   const [showConfigModal, setShowConfigModal] = useState(false);
-  const [configHost, setConfigHost] = useState("");
-  const [configWsPort, setConfigWsPort] = useState(3000);
-  const [configUdpPort, setConfigUdpPort] = useState(3001);
-  const [configStun, setConfigStun] = useState("");
+  const [webDomain, setWebDomain] = useState("nodejs-jp5lts.chbkn.dev");
+  const [streamHost, setStreamHost] = useState("services.irn18.chabokan.net");
+  const [streamWsPort, setStreamWsPort] = useState(17833);
+  const [streamUdpPort, setStreamUdpPort] = useState(3001);
   const [configNotice, setConfigNotice] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
   const [isTestingPorts, setIsTestingPorts] = useState(false);
@@ -126,20 +126,16 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
     fetch("/api/config")
       .then((res) => res.json())
       .then((data) => {
-        if (data.publicHost) setConfigHost(data.publicHost);
-        if (data.publicWsPort) setConfigWsPort(data.publicWsPort);
-        if (data.publicUdpPort) setConfigUdpPort(data.publicUdpPort);
-        if (data.stunServers) setConfigStun(data.stunServers.join(", "));
+        if (data.webDomain) setWebDomain(data.webDomain);
+        if (data.streamHost) setStreamHost(data.streamHost);
+        if (data.streamWsPort) setStreamWsPort(data.streamWsPort);
+        if (data.streamUdpPort) setStreamUdpPort(data.streamUdpPort);
 
-        // Construct external public WebSocket URL for all users
-        // If domain is HTTPS or on port 443, standard WSS is used without non-standard ports
+        // WebRTC/WebSocket Realtime Stream URL goes directly to streamHost:streamWsPort!
         const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const extHost = (data.publicHost && data.publicHost.trim()) || window.location.hostname;
-        const portNum = Number(data.publicWsPort);
-        const extPort = portNum && portNum !== 80 && portNum !== 443
-          ? `:${portNum}`
-          : (window.location.port && window.location.port !== "80" && window.location.port !== "443" ? `:${window.location.port}` : "");
-        const computedWsUrl = `${wsProto}//${extHost.replace(/^https?:\/\//, "").replace(/\/+$/, "")}${extPort}/ws`;
+        const sHost = (data.streamHost && data.streamHost.trim()) || "services.irn18.chabokan.net";
+        const sPort = data.streamWsPort ? `:${data.streamWsPort}` : "";
+        const computedWsUrl = `${wsProto}//${sHost.replace(/^https?:\/\//, "").replace(/\/+$/, "")}${sPort}/ws`;
         setWorkerUrl(computedWsUrl);
         localStorage.setItem("classroom_ws_url", computedWsUrl);
       })
@@ -151,15 +147,10 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   }, []);
 
   const getRoomInviteLink = (roomId: string) => {
-    // 1. If admin explicitly configured public domain (e.g. nodejs-jp5lts.chbkn.dev), use it!
-    if (configHost && configHost.trim()) {
-      const cleanHost = configHost.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-      return `https://${cleanHost}/?room=${roomId}`;
-    }
-
-    // 2. Otherwise use the domain currently opened in the browser (Always standard HTTPS without port)
-    const hostname = window.location.hostname;
-    return `https://${hostname}/?room=${roomId}`;
+    // Web invite links always go to webDomain (HTTPS on 443 with ZERO extra ports!)
+    const targetDomain = (webDomain && webDomain.trim()) || "nodejs-jp5lts.chbkn.dev";
+    const cleanDomain = targetDomain.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    return `https://${cleanDomain}/?room=${roomId}`;
   };
 
   const handleSaveConfig = async (e: React.FormEvent) => {
@@ -174,10 +165,10 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
           Authorization: `Bearer ${adminToken}`,
         },
         body: JSON.stringify({
-          publicHost: configHost.trim(),
-          publicWsPort: configWsPort,
-          publicUdpPort: configUdpPort,
-          stunServers: configStun.split(",").map((s) => s.trim()).filter(Boolean),
+          webDomain: webDomain.trim(),
+          streamHost: streamHost.trim(),
+          streamWsPort: streamWsPort,
+          streamUdpPort: streamUdpPort,
         }),
       });
       const data = await res.json();
@@ -198,28 +189,8 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
     setIsTestingPorts(true);
     setTestResult(null);
 
-    const testHost = configHost.trim() || window.location.hostname;
-    const testPort = configWsPort || 3000;
-    const proto = window.location.protocol;
-
     try {
-      // 1. Direct browser probe to verify HTTP/WS reachability from user's internet
-      let browserReachable = false;
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
-        const probeUrl = testPort === 80 || testPort === 443
-          ? `${proto}//${testHost}/health`
-          : `${proto}//${testHost}:${testPort}/health`;
-        const probeRes = await fetch(probeUrl, {
-          signal: controller.signal,
-          mode: "cors",
-        });
-        clearTimeout(timeoutId);
-        if (probeRes.ok) browserReachable = true;
-      } catch (e) {}
-
-      // 2. Server-side test
+      // Test the realtime stream host and forwarded port
       const res = await fetch("/api/config/test", {
         method: "POST",
         headers: {
@@ -227,53 +198,30 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
           Authorization: `Bearer ${adminToken}`,
         },
         body: JSON.stringify({
-          publicHost: configHost.trim(),
-          publicWsPort: configWsPort,
-          publicUdpPort: configUdpPort,
+          streamHost: streamHost.trim(),
+          streamWsPort: streamWsPort,
+          streamUdpPort: streamUdpPort,
         }),
       });
 
       const contentType = res.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
-        // Returned HTML (e.g. index.html or 404/502 gateway error)
-        const text = await res.text();
-        if (browserReachable) {
-          setTestResult({
-            success: true,
-            message: `اتصال وب با موفقیت تایید شد. (سرور به پورت ${testPort} پاسخ می‌دهد).`,
-            details: { httpReachable: true },
-          });
-          return;
-        }
-        throw new Error(
-          res.status === 404
-            ? "مسیر /api/config/test یافت نشد. سرویس در چابکان را Redeploy کنید."
-            : `پاسخ نامعتبر از سرور (کد ${res.status}). سرور به جای JSON صفحه HTML بازگرداند.`
-        );
+        throw new Error("سرویس چابکان هنوز ری‌استارت نشده است. لطفاً در پنل دکمه Redeploy را بزنید.");
       }
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "خطا در تست اتصال");
 
-      const isWebOk = browserReachable || data.httpReachable;
-      const isUdpOk = data.udpReachable;
-
-      if (isWebOk && isUdpOk) {
+      if (data.httpReachable) {
         setTestResult({
           success: true,
-          message: `ارتباط با پورت‌های سرور با موفقیت تایید شد (تاخیر: ${data.latencyMs}ms). پورت وب (${data.wsPort}) و پورت UDP (${data.udpPort}) هر دو فعال و در دسترس هستند.`,
-          details: data,
-        });
-      } else if (isWebOk && !isUdpOk) {
-        setTestResult({
-          success: true,
-          message: `پورت وب (${data.wsPort}) متصل شد، اما پورت UDP (${data.udpPort}) پاسخی نداد. (در صورتی که در چابکان پورت UDP به پورت دیگری فوروارد شده، شماره آن را بررسی فرمایید).`,
+          message: `اتصال به سرور زنده چابکان (${data.targetHost}:${data.wsPort}) موفقیت‌آمیز است (تاخیر: ${data.latencyMs}ms). پروتکل WS و پورت فورواردشده در دسترس است.`,
           details: data,
         });
       } else {
         setTestResult({
           success: false,
-          message: `عدم امکان برقراری ارتباط با دامنه ${testHost} و پورت ${testPort}. خطا: ${data.httpError || "پورت مسدود یا اشتباه است"}. لطفاً دامنه و پورت‌های فورواردشده را در پنل چابکان چک کنید.`,
+          message: `عدم امکان برقراری ارتباط با پورت فورواردشده ${data.wsPort} در سرور ${data.targetHost}. خطا: ${data.httpError || "پورت بسته است"}`,
           details: data,
         });
       }
@@ -974,62 +922,68 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
               )}
 
               <form onSubmit={handleSaveConfig} className="space-y-3 text-xs">
+                {/* 1. Web Domain for User Invite Links */}
                 <div>
                   <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
-                    دامنه یا آدرس عمومی سرور (Public Host / Domain):
+                    دامنه وب سایت و لینک دعوت کاربران (Web App Domain):
                   </label>
                   <input
                     type="text"
-                    value={configHost}
-                    onChange={(e) => setConfigHost(e.target.value)}
-                    placeholder="مثال: nodejs-jp5lts.chbkn.dev یا خالی برای خودکار"
+                    value={webDomain}
+                    onChange={(e) => setWebDomain(e.target.value)}
+                    placeholder="nodejs-jp5lts.chbkn.dev"
                     className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
                   />
-                  <p className="text-[10px] text-adobe-muted mt-0.5">دامنه اصلی شما در چابکان (مانند nodejs-jp5lts.chbkn.dev). لینک دعوت همواره با HTTPS و بر این دامنه بدون هیچ پورت اضافی تولید می‌شود.</p>
+                  <p className="text-[10px] text-emerald-400 mt-0.5">
+                    این همان آدرسی است که چابکان به شما می‌دهد. لینک‌های دعوت ارسالی به کاربران منحصراً با این دامنه و با پروتکل HTTPS بدون هیچ پورت اضافی ساخته می‌شوند.
+                  </p>
+                </div>
+
+                <div className="border-t border-adobe-border/50 pt-2" />
+
+                {/* 2. Realtime Stream Host & Ports (services.irn18.chabokan.net) */}
+                <div>
+                  <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
+                    آدرس سرور استریم زنده WS و UDP (Stream Server Host):
+                  </label>
+                  <input
+                    type="text"
+                    value={streamHost}
+                    onChange={(e) => setStreamHost(e.target.value)}
+                    placeholder="services.irn18.chabokan.net"
+                    className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
+                  />
+                  <p className="text-[10px] text-adobe-muted mt-0.5">
+                    سرور ارتباط زنده که پورت‌های فورواردشده کلاستر چابکان به آن هدایت می‌شوند.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
-                      پورت وب / WS (برای دامنه‌های چابکان معمولاً 443):
+                      پورت فورواردشده وب‌سوکت (WS Port):
                     </label>
                     <input
                       type="number"
-                      value={configWsPort}
-                      onChange={(e) => setConfigWsPort(Number(e.target.value))}
-                      placeholder="443"
+                      value={streamWsPort}
+                      onChange={(e) => setStreamWsPort(Number(e.target.value))}
+                      placeholder="17833"
                       className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
                     />
                   </div>
 
                   <div>
                     <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
-                      پورت عمومی فورواردشده UDP:
+                      پورت فورواردشده UDP:
                     </label>
                     <input
                       type="number"
-                      value={configUdpPort}
-                      onChange={(e) => setConfigUdpPort(Number(e.target.value))}
+                      value={streamUdpPort}
+                      onChange={(e) => setStreamUdpPort(Number(e.target.value))}
                       placeholder="3001"
                       className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
                     />
                   </div>
-                </div>
-                <p className="text-[10px] text-amber-300/80 bg-amber-950/40 p-2 rounded border border-amber-800/60 leading-relaxed">
-                  نکته چابکان: اگر در چابکان پورت UDP به پورت دیگری مپ شده است (مثلاً 3001 به 32145 فوروارد شده)، عدد پورت خارجی را در فیلد UDP وارد کنید.
-                </p>
-
-                <div>
-                  <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
-                    سرورهای STUN برای WebRTC (با کاما جدا کنید):
-                  </label>
-                  <input
-                    type="text"
-                    value={configStun}
-                    onChange={(e) => setConfigStun(e.target.value)}
-                    placeholder="اختیاری: مثلاً stun:your-domain.ir:3478 یا خالی برای اتصال مستقیم"
-                    className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
-                  />
                 </div>
 
                 <div className="flex items-center justify-between gap-2 pt-2 border-t border-adobe-border">

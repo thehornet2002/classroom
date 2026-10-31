@@ -93,10 +93,10 @@ function initSchema() {
   const configStmt = db.prepare("SELECT count(*) as count FROM server_config");
   if (configStmt.get().count === 0) {
     const insertConf = db.prepare("INSERT INTO server_config (key, value) VALUES (?, ?)");
-    insertConf.run("public_host", process.env.PUBLIC_HOST || "");
-    insertConf.run("public_ws_port", process.env.PUBLIC_WS_PORT || "3000");
-    insertConf.run("public_udp_port", process.env.PUBLIC_UDP_PORT || "3001");
-    insertConf.run("stun_servers", process.env.STUN_SERVERS || "");
+    insertConf.run("web_domain", process.env.WEB_DOMAIN || "");
+    insertConf.run("stream_host", process.env.STREAM_HOST || "");
+    insertConf.run("stream_ws_port", process.env.STREAM_WS_PORT || "3000");
+    insertConf.run("stream_udp_port", process.env.STREAM_UDP_PORT || "3001");
   }
 
   // Seed default admin and sample data if users table is empty

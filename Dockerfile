@@ -1,5 +1,5 @@
 # Stage 1: Build Frontend Web Application
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
@@ -8,8 +8,8 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Production Server (Node.js + WebSockets + UDP + Chabokan Cloud Deployment)
-FROM node:20-alpine
+# Stage 2: Production Server (Node.js 22 LTS + WebSockets + UDP + Chabokan Cloud Deployment)
+FROM node:22-alpine
 WORKDIR /app
 
 ENV NODE_ENV=production

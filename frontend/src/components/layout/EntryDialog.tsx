@@ -151,25 +151,15 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   }, []);
 
   const getRoomInviteLink = (roomId: string) => {
-    // 1. If admin configured a public domain in network settings, use it
+    // 1. If admin explicitly configured public domain (e.g. nodejs-jp5lts.chbkn.dev), use it!
     if (configHost && configHost.trim()) {
       const cleanHost = configHost.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-      const portPart = configWsPort && configWsPort !== 80 && configWsPort !== 443 ? `:${configWsPort}` : "";
-      return `https://${cleanHost}${portPart}/?room=${roomId}`;
+      return `https://${cleanHost}/?room=${roomId}`;
     }
 
-    // 2. If accessing via Chabokan public domain (e.g. *.chbkn.dev or any clean domain without internal ports)
+    // 2. Otherwise use the domain currently opened in the browser (Always standard HTTPS without port)
     const hostname = window.location.hostname;
-    const protocol = window.location.protocol; // usually https:
-    const port = window.location.port;
-
-    // Filter out internal docker/container forwarding ports (e.g. 17833, 3000, etc.)
-    if (port && port !== "80" && port !== "443" && (hostname.includes("chabokan.net") || hostname.includes("chbkn.dev"))) {
-      // Strip internal cluster port!
-      return `${protocol}//${hostname}/?room=${roomId}`;
-    }
-
-    return `${window.location.origin}/?room=${roomId}`;
+    return `https://${hostname}/?room=${roomId}`;
   };
 
   const handleSaveConfig = async (e: React.FormEvent) => {
@@ -992,10 +982,10 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
                     type="text"
                     value={configHost}
                     onChange={(e) => setConfigHost(e.target.value)}
-                    placeholder="مثال: classroom.chabokan.app یا خالی برای خودکار"
+                    placeholder="مثال: nodejs-jp5lts.chbkn.dev یا خالی برای خودکار"
                     className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
                   />
-                  <p className="text-[10px] text-adobe-muted mt-0.5">در صورت خالی بودن، از آدرس جاری مرورگر استفاده می‌شود.</p>
+                  <p className="text-[10px] text-adobe-muted mt-0.5">دامنه اصلی شما در چابکان (مانند nodejs-jp5lts.chbkn.dev). لینک دعوت همواره با HTTPS و بر این دامنه بدون هیچ پورت اضافی تولید می‌شود.</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">

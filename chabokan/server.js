@@ -172,34 +172,22 @@ app.post("/api/lms/sessions", authenticateToken, requireRole("admin", "teacher")
 function getFormattedInviteLink(roomId, req) {
   try {
     const hostRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_host'").get();
-    const portRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_ws_port'").get();
     const configHost = (hostRow?.value || "").trim();
-    const configPort = parseInt(portRow?.value || "", 10);
 
-    let host = configHost;
-    let proto = "https:";
-    let portStr = "";
+    // 1. If host is explicitly configured by admin, ALWAYS use it
+    if (configHost) {
+      const cleanHost = configHost.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      return `https://${cleanHost}/?room=${roomId}`;
+    }
 
+    // 2. Otherwise detect from request headers
     if (req) {
-      const forwardedProto = req.headers["x-forwarded-proto"];
-      proto = forwardedProto ? `${forwardedProto}:` : (req.secure ? "https:" : "http:");
-      if (!host) {
-        host = req.headers["x-forwarded-host"] || req.hostname || "localhost";
+      const forwardedHost = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
+      if (forwardedHost) {
+        // Strip any port and protocol
+        const cleanHost = forwardedHost.split(":")[0].trim();
+        return `https://${cleanHost}/?room=${roomId}`;
       }
-    }
-
-    if (configPort && configPort !== 80 && configPort !== 443) {
-      portStr = `:${configPort}`;
-    }
-
-    if (host) {
-      // Remove any internal cluster port like :17833 or :3000 if host contains it
-      let cleanHost = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-      if (cleanHost.includes("chabokan.net") || cleanHost.includes("chbkn.dev")) {
-        cleanHost = cleanHost.split(":")[0];
-        portStr = ""; // Always standard 443 for chabokan domains
-      }
-      return `${proto}//${cleanHost}${portStr}/?room=${roomId}`;
     }
   } catch (e) {}
   return `/?room=${roomId}`;
@@ -277,9 +265,9 @@ app.get("/api/config", (req, res) => {
   for (const row of rows) {
     config[row.key] = row.value;
   }
-  const host = config.public_host || req.hostname || "localhost";
-  const wsPort = parseInt(config.public_ws_port || "3000", 10);
-  const udpPort = parseInt(config.public_udp_port || "3001", 10);
+  const host = config.public_host || "";
+  const wsPort = config.public_ws_port ? parseInt(config.public_ws_port, 10) : 3000;
+  const udpPort = config.public_udp_port ? parseInt(config.public_udp_port, 10) : 3001;
   const stunServers = (config.stun_servers || "")
     .split(",")
     .map((s) => s.trim())

@@ -102,7 +102,8 @@ function downloadRecording(res, id) {
     return res.status(404).json({ error: "فایل روی سرور موجود نیست." });
   }
 
-  const safeFilename = `Classroom-${rec.title.replace(/[\/\\?%*:|"<>]/g, "_")}.webm`;
+  const ext = path.extname(rec.filename) || ".webm";
+  const safeFilename = `Classroom-${rec.title.replace(/[\/\\?%*:|"<>]/g, "_")}${ext}`;
   res.download(filePath, safeFilename);
 }
 

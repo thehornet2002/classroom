@@ -44,7 +44,15 @@ export const AttendeePod: React.FC<AttendeePodProps> = ({ sendMessage }) => {
   const hosts = users.filter((u) => u.role === "host" && u.admitted);
   const presenters = users.filter((u) => u.role === "presenter" && u.admitted);
   const participants = users.filter((u) => u.role === "participant" && u.admitted);
-  const pendingAdmission = users.filter((u) => !u.admitted);
+
+  // Deduplicate pending admission by user name/id to prevent duplicate requests
+  const pendingMap = new Map<string, (typeof users)[0]>();
+  for (const u of users) {
+    if (!u.admitted) {
+      pendingMap.set(u.name || u.id, u);
+    }
+  }
+  const pendingAdmission = Array.from(pendingMap.values());
   const raisedHands = users.filter((u) => u.status === "raised_hand");
 
   const toggleGroup = (key: "hosts" | "presenters" | "participants") => {

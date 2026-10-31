@@ -6,6 +6,7 @@ import { sounds } from "../lib/soundEffects";
 
 export function useWebSocket(url: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
+  const isConnectingRef = useRef<boolean>(false);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const pingIntervalRef = useRef<number | null>(null);
 
@@ -56,14 +57,27 @@ export function useWebSocket(url: string | null) {
     let isMounted = true;
 
     function connect() {
+      if (!isMounted) return;
       if (wsRef.current) {
-        wsRef.current.close();
+        if (wsRef.current.readyState === WebSocket.OPEN) return;
+        try {
+          wsRef.current.onopen = null;
+          wsRef.current.onclose = null;
+          wsRef.current.onerror = null;
+          wsRef.current.onmessage = null;
+          wsRef.current.close();
+        } catch (e) {}
+        wsRef.current = null;
       }
+
+      if (isConnectingRef.current) return;
+      isConnectingRef.current = true;
 
       const ws = new WebSocket(targetUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        isConnectingRef.current = false;
         if (!isMounted) return;
         setWsConnected(true);
 
@@ -79,18 +93,19 @@ export function useWebSocket(url: string | null) {
       };
 
       ws.onclose = (event) => {
+        isConnectingRef.current = false;
         if (!isMounted) return;
         setWsConnected(false);
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
 
-        if (event.code === 4001 || event.code === 4002) {
-          // Kicked or denied admission, do not auto-reconnect
+        if (event.code === 4001 || event.code === 4002 || event.code === 4005) {
+          // Kicked, denied admission, or replaced by new connection
           return;
         }
 
         // Fast reconnect
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = window.setTimeout(connect, 1500);
+        reconnectTimeoutRef.current = window.setTimeout(connect, 2000);
       };
 
       ws.onerror = (err) => {

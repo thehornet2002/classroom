@@ -130,6 +130,16 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
         if (data.publicWsPort) setConfigWsPort(data.publicWsPort);
         if (data.publicUdpPort) setConfigUdpPort(data.publicUdpPort);
         if (data.stunServers) setConfigStun(data.stunServers.join(", "));
+
+        // Construct external public WebSocket URL for all users based on forwarded port
+        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const extHost = data.publicHost || window.location.hostname;
+        const extPort = data.publicWsPort
+          ? (data.publicWsPort === 80 || data.publicWsPort === 443 ? "" : `:${data.publicWsPort}`)
+          : (window.location.port ? `:${window.location.port}` : "");
+        const computedWsUrl = `${wsProto}//${extHost}${extPort}/ws`;
+        setWorkerUrl(computedWsUrl);
+        localStorage.setItem("classroom_ws_url", computedWsUrl);
       })
       .catch(() => {});
   };
@@ -137,6 +147,13 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   useEffect(() => {
     fetchServerConfig();
   }, []);
+
+  const getRoomInviteLink = (roomId: string) => {
+    const portPart = configWsPort && configWsPort !== 80 && configWsPort !== 443 ? `:${configWsPort}` : (window.location.port ? `:${window.location.port}` : "");
+    const hostPart = configHost || window.location.hostname;
+    const protocol = window.location.protocol;
+    return `${protocol}//${hostPart}${portPart}/?room=${roomId}`;
+  };
 
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,6 +177,9 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
       if (!res.ok) throw new Error(data.error || "خطا در ذخیره کانفیگ");
       setConfigNotice("تنظیمات با موفقیت ذخیره شد!");
       setTimeout(() => setConfigNotice(""), 3000);
+
+      // Re-fetch to apply updated port to current session
+      fetchServerConfig();
     } catch (err: any) {
       alert(err.message || "خطا در ذخیره تنظیمات");
     } finally {
@@ -170,7 +190,26 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   const handleTestPorts = async () => {
     setIsTestingPorts(true);
     setTestResult(null);
+
+    const testHost = configHost.trim() || window.location.hostname;
+    const testPort = configWsPort || 3000;
+    const proto = window.location.protocol;
+
     try {
+      // 1. Direct browser probe to verify HTTP/WS reachability from user's internet
+      let browserReachable = false;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const probeRes = await fetch(`${proto}//${testHost}:${testPort}/health`, {
+          signal: controller.signal,
+          mode: "cors",
+        });
+        clearTimeout(timeoutId);
+        if (probeRes.ok) browserReachable = true;
+      } catch (e) {}
+
+      // 2. Server-side test
       const res = await fetch("/api/config/test", {
         method: "POST",
         headers: {
@@ -185,16 +224,26 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "خطا در تست اتصال");
-      if (data.success) {
+
+      const isWebOk = browserReachable || data.httpReachable;
+      const isUdpOk = data.udpReachable;
+
+      if (isWebOk && isUdpOk) {
         setTestResult({
           success: true,
-          message: `ارتباط با پورت‌های سرور با موفقیت تایید شد (تاخیر: ${data.latencyMs}ms). اتصال به پورت وب ${data.wsPort} و UDP ${data.udpPort} برقرار است.`,
+          message: `ارتباط با پورت‌های سرور با موفقیت تایید شد (تاخیر: ${data.latencyMs}ms). پورت وب (${data.wsPort}) و پورت UDP (${data.udpPort}) هر دو فعال و در دسترس هستند.`,
+          details: data,
+        });
+      } else if (isWebOk && !isUdpOk) {
+        setTestResult({
+          success: true,
+          message: `پورت وب (${data.wsPort}) متصل شد، اما پورت UDP (${data.udpPort}) پاسخی نداد. (در صورتی که در چابکان پورت UDP به پورت دیگری فوروارد شده، شماره آن را بررسی فرمایید).`,
           details: data,
         });
       } else {
         setTestResult({
           success: false,
-          message: `امکان اتصال به پورت‌های مشخص‌شده فراهم نشد. (پورت وب: ${data.wsPort}، پورت UDP: ${data.udpPort}). خطا: ${data.httpError || data.udpError || "پورت در دسترس نیست"}`,
+          message: `عدم امکان برقراری ارتباط با دامنه ${testHost} و پورت ${testPort}. خطا: ${data.httpError || "پورت مسدود یا اشتباه است"}. لطفاً دامنه و پورت‌های فورواردشده را در پنل چابکان چک کنید.`,
           details: data,
         });
       }
@@ -318,7 +367,7 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
         throw new Error(data.error || "خطا در ساخت اتاق.");
       }
 
-      const fullInviteLink = `${window.location.origin}/?room=${data.room.id}`;
+      const fullInviteLink = getRoomInviteLink(data.room.id);
       setCreatedRoom({
         id: data.room.id,
         title: data.room.title,
@@ -830,7 +879,7 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
 
                       <div className="flex items-center gap-1.5">
                         <button
-                          onClick={() => handleCopyLink(`${window.location.origin}/?room=${r.id}`)}
+                          onClick={() => handleCopyLink(getRoomInviteLink(r.id))}
                           className="p-1.5 rounded hover:bg-adobe-border text-adobe-muted hover:text-white"
                           title="کپی لینک دعوت"
                         >

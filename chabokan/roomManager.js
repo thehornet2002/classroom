@@ -143,7 +143,20 @@ class Room {
     const cleanName = sanitizeText(name, 50) || cleanUsername;
     const finalRole = isTeacherOrAdmin ? "host" : "participant";
     const isHost = finalRole === "host";
-    const isPreviouslyAdmitted = this.isTokenAdmitted(admitToken);
+
+    // Clean up any stale connection for this exact userId
+    const oldPeer = this.peers.get(userId);
+    if (oldPeer && oldPeer.ws !== ws) {
+      try {
+        oldPeer.ws.onclose = null;
+        oldPeer.ws.close(4005, "Reconnected with new connection");
+      } catch (e) {}
+      this.peers.delete(userId);
+    }
+
+    // Check if user was already admitted previously or has valid token
+    const wasAlreadyAdmitted = (this.users[userId] && this.users[userId].admitted) || this.isTokenAdmitted(admitToken);
+    const wasAlreadyWaiting = this.users[userId] && !this.users[userId].admitted;
 
     const user = {
       id: userId,
@@ -153,7 +166,7 @@ class Room {
       status: "none",
       permissions: getDefaultPermissions(finalRole),
       joinedAt: Date.now(),
-      admitted: isHost || isPreviouslyAdmitted, // Auto-admit if user has valid reconnect admission token
+      admitted: isHost || wasAlreadyAdmitted,
     };
 
     this.peers.set(userId, { ws, user });
@@ -164,14 +177,17 @@ class Room {
         type: "ADMISSION_REQUIRED",
         message: "شما در صف انتظار هستید. لطفاً منتظر بمانید تا مدیر کلاس ورود شما را تایید کند.",
       });
-      // Broadcast to host so waiting list updates
-      this.broadcastToRoles(["host"], { type: "USER_JOINED", user });
+      // Only broadcast to host if not already in waiting list to prevent duplicate notifications
+      if (!wasAlreadyWaiting) {
+        this.broadcastToRoles(["host"], { type: "USER_JOINED", user });
+      }
     } else {
       let activeToken = admitToken;
       if (!activeToken) {
         activeToken = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        this.admittedTokens.set(activeToken, { userId, name: cleanName });
       }
+      this.admittedTokens.set(activeToken, { userId, name: cleanName });
+
       this.sendTo(ws, {
         type: "ADMISSION_APPROVED",
         token: activeToken,
@@ -189,9 +205,17 @@ class Room {
     });
 
     const cleanup = () => {
-      this.peers.delete(userId);
-      delete this.users[userId];
-      this.broadcast({ type: "USER_LEFT", userId });
+      const cur = this.peers.get(userId);
+      if (cur && cur.ws === ws) {
+        this.peers.delete(userId);
+        // Retain user record for a 15-second grace period so momentary drops don't lose admission
+        setTimeout(() => {
+          if (!this.peers.has(userId)) {
+            delete this.users[userId];
+            this.broadcast({ type: "USER_LEFT", userId });
+          }
+        }, 15000);
+      }
     };
 
     ws.on("close", cleanup);
@@ -574,53 +598,72 @@ class Room {
       case "STOP_RECORDING": {
         if (sender.user.role !== "host" || !this.isRecording) return;
         const durationSec = Math.max(1, Math.round((Date.now() - (this.recordingStartedAt || Date.now())) / 1000));
-        const recId = this.currentRecordingId || `rec_${Date.now()}`;
-        const filename = `${recId}.webm`;
-        const recTitle = `${this.roomName} - ${new Date().toLocaleDateString("fa-IR")}`;
-        const teacherName = sender.user.name || "مدیر کلاس";
+        let recId = msg.recordingId || this.currentRecordingId || `rec_${Date.now()}`;
+        let recTitle = msg.title || `${this.roomName} - ${new Date().toLocaleDateString("fa-IR")}`;
+        let downloadUrl = msg.downloadUrl;
 
-        try {
-          const { db } = require("./db");
-          const fs = require("fs");
-          const path = require("path");
-          const recDir = path.join(__dirname, "recordings");
-          if (!fs.existsSync(recDir)) fs.mkdirSync(recDir, { recursive: true });
-          const filePath = path.join(recDir, filename);
+        // If client did not upload a media file via /api/recordings/upload, generate interactive replay recording
+        if (!downloadUrl) {
+          try {
+            const { db } = require("./db");
+            const fs = require("fs");
+            const path = require("path");
+            const recDir = path.join(__dirname, "recordings");
+            if (!fs.existsSync(recDir)) fs.mkdirSync(recDir, { recursive: true });
+            const filename = `${recId}.html`;
+            const filePath = path.join(recDir, filename);
 
-          const summaryData = {
-            id: recId,
-            roomId: this.roomId,
-            roomName: this.roomName,
-            teacherName,
-            durationSeconds: durationSec,
-            recordedAt: Date.now(),
-            totalChatMessages: this.chatMessages.length,
-            whiteboardPages: this.whiteboardPage,
-            strokesCount: this.whiteboardStrokes.length,
-            status: "completed",
-          };
-          fs.writeFileSync(filePath, JSON.stringify(summaryData, null, 2));
-          const stat = fs.statSync(filePath);
+            const replayHtml = `<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <title>بازپخش جلسه: ${this.roomName}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 2rem; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 1rem; padding: 2rem; max-width: 600px; margin: 0 auto; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
+    h1 { color: #38bdf8; font-size: 1.5rem; margin-top: 0; }
+    .stat { display: flex; justify-content: space-between; padding: 0.75rem 0; border-bottom: 1px solid #334155; }
+    .badge { background: #0284c7; color: white; padding: 0.25rem 0.75rem; border-radius: 9999px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>گزارش جلسه آنلاین: ${this.roomName}</h1>
+    <div class="stat"><span>استاد کلاس:</span><strong>${sender.user.name || "مدیر"}</strong></div>
+    <div class="stat"><span>مدت زمان ضبط:</span><span class="badge">${Math.floor(durationSec / 60)} دقیقه و ${durationSec % 60} ثانیه</span></div>
+    <div class="stat"><span>تاریخ جلسه:</span><span>${new Date().toLocaleDateString("fa-IR")}</span></div>
+    <div class="stat"><span>تعداد پیام‌های چت:</span><span>${this.chatMessages.length}</span></div>
+    <div class="stat"><span>صفحات تخته سفید:</span><span>${this.whiteboardPage}</span></div>
+    <p style="margin-top:1.5rem;color:#94a3b8;font-size:0.875rem;text-align:center;">این فایل بازپخش رسمی جلسه سامانه Classroom در چابکان است.</p>
+  </div>
+</body>
+</html>`;
+            fs.writeFileSync(filePath, replayHtml, "utf8");
+            const stat = fs.statSync(filePath);
 
-          db.prepare(`
-            INSERT INTO recordings (id, session_id, course_id, title, filename, filesize, duration_seconds, teacher_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(recId, this.roomId, "c_general", recTitle, filename, stat.size, durationSec, teacherName, Date.now());
-        } catch (err) {
-          console.error("Error creating server recording:", err);
+            db.prepare(`
+              INSERT INTO recordings (id, session_id, course_id, title, filename, filesize, duration_seconds, teacher_name, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(recId, this.roomId, "c_general", recTitle, filename, stat.size, durationSec, sender.user.name || "مدیر کلاس", Date.now());
+
+            downloadUrl = `/api/recordings/${recId}/download`;
+          } catch (err) {
+            console.error("Error saving fallback recording:", err);
+          }
         }
 
         this.isRecording = false;
         this.recordingStartedAt = null;
         this.currentRecordingId = null;
 
-        const downloadUrl = `/api/recordings/${recId}/download`;
-        this.broadcast({
-          type: "RECORDING_FINISHED",
-          recordingId: recId,
-          title: recTitle,
-          downloadUrl,
-        });
+        if (downloadUrl) {
+          this.broadcast({
+            type: "RECORDING_FINISHED",
+            recordingId: recId,
+            title: recTitle,
+            downloadUrl,
+          });
+        }
         this.broadcast({ type: "RECORDING_STATE", isRecording: false });
         break;
       }

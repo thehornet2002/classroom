@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  classroom:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: classroom
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "3001:3001/udp"
+    environment:
+      - PORT=3000
+      - UDP_PORT=3001
+      - NODE_ENV=production
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+      - JWT_SECRET=chabokan-super-secret-classroom-key-2026
+    volumes:
+      - ./chabokan/data:/app/data
+      - ./chabokan/recordings:/app/recordings

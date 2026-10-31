@@ -82,22 +82,7 @@ function initSchema() {
       created_at INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'active'
     );
-
-    CREATE TABLE IF NOT EXISTS server_config (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
   `);
-
-  // Seed default server config if empty
-  const configStmt = db.prepare("SELECT count(*) as count FROM server_config");
-  if (configStmt.get().count === 0) {
-    const insertConf = db.prepare("INSERT INTO server_config (key, value) VALUES (?, ?)");
-    insertConf.run("public_host", process.env.PUBLIC_HOST || "");
-    insertConf.run("public_ws_port", process.env.PUBLIC_WS_PORT || "3000");
-    insertConf.run("public_udp_port", process.env.PUBLIC_UDP_PORT || "3001");
-    insertConf.run("stun_servers", process.env.STUN_SERVERS || "");
-  }
 
   // Seed default admin and sample data if users table is empty
   const countStmt = db.prepare("SELECT count(*) as count FROM users");

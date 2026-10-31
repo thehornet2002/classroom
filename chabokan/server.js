@@ -31,6 +31,7 @@ const UDP_PORT = process.env.UDP_PORT || 3001;
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const app = express();
+app.set("trust proxy", true); // Required for Chabokan edge reverse proxy
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 
@@ -169,15 +170,15 @@ app.post("/api/lms/sessions", authenticateToken, requireRole("admin", "teacher")
   res.status(201).json(session);
 });
 
-function getFormattedInviteLink(roomId) {
+function getFormattedInviteLink(roomId, req) {
   try {
-    const hostRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_host'").get();
-    const portRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_ws_port'").get();
-    const host = hostRow?.value || "";
-    const port = portRow?.value || "3000";
-    const portStr = port && port !== "80" && port !== "443" ? `:${port}` : "";
-    if (host) {
-      return `http://${host}${portStr}/?room=${roomId}`;
+    if (req) {
+      const forwardedProto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
+      const hostHeader = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
+      if (hostHeader) {
+        const cleanHost = hostHeader.split(":")[0];
+        return `${forwardedProto}://${cleanHost}/?room=${roomId}`;
+      }
     }
   } catch (e) {}
   return `/?room=${roomId}`;
@@ -215,7 +216,7 @@ app.post("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req,
       id: roomId,
       title: cleanTitle,
       transport: transportConfig,
-      inviteLink: getFormattedInviteLink(roomId),
+      inviteLink: getFormattedInviteLink(roomId, req),
       createdAt: now,
     },
   });
@@ -231,7 +232,7 @@ app.get("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req, 
       id: r.id,
       title: r.title,
       transport,
-      inviteLink: getFormattedInviteLink(r.id),
+      inviteLink: getFormattedInviteLink(r.id, req),
       activeUsers: activeRoom ? Object.keys(activeRoom.users).length : 0,
       createdAt: r.created_at,
     };
@@ -247,141 +248,14 @@ app.delete("/api/rooms/:id", authenticateToken, requireRole("admin", "teacher"),
 });
 
 // ==========================================
-// 2.6 Chabokan Server & Port Configuration
+// 2.6 Server Configuration (Chabokan Edge Routing)
 // ==========================================
 app.get("/api/config", (req, res) => {
-  const rows = db.prepare("SELECT key, value FROM server_config").all();
-  const config = {};
-  for (const row of rows) {
-    config[row.key] = row.value;
-  }
-  const host = config.public_host || req.hostname || "localhost";
-  const wsPort = parseInt(config.public_ws_port || "3000", 10);
-  const udpPort = parseInt(config.public_udp_port || "3001", 10);
-  const stunServers = (config.stun_servers || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
   res.json({
-    publicHost: host,
-    publicWsPort: wsPort,
-    publicUdpPort: udpPort,
-    stunServers,
+    status: "ok",
+    platform: "Chabokan",
+    protocol: req.secure ? "https" : "http",
   });
-});
-
-app.post("/api/config", authenticateToken, requireRole("admin"), (req, res) => {
-  const { publicHost, publicWsPort, publicUdpPort, stunServers } = req.body;
-  const updateStmt = db.prepare("INSERT OR REPLACE INTO server_config (key, value) VALUES (?, ?)");
-
-  if (publicHost !== undefined) updateStmt.run("public_host", sanitizeText(publicHost, 200));
-  if (publicWsPort !== undefined) updateStmt.run("public_ws_port", String(parseInt(publicWsPort, 10) || 3000));
-  if (publicUdpPort !== undefined) updateStmt.run("public_udp_port", String(parseInt(publicUdpPort, 10) || 3001));
-  if (stunServers !== undefined) {
-    const stunStr = Array.isArray(stunServers) ? stunServers.join(",") : String(stunServers);
-    updateStmt.run("stun_servers", sanitizeText(stunStr, 1000));
-  }
-
-  res.json({ success: true, message: "تنظیمات سرور چابکان با موفقیت ذخیره شد." });
-});
-
-// Test network & port connectivity for Chabokan configuration
-app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req, res) => {
-  const { publicHost, publicWsPort, publicUdpPort } = req.body;
-  const targetHost = (publicHost && publicHost.trim()) || "";
-  const wsPort = parseInt(publicWsPort, 10);
-  const udpPort = parseInt(publicUdpPort, 10);
-
-  if (!targetHost) {
-    return res.status(400).json({ error: "لطفاً ابتدا دامنه یا آدرس سرور چابکان را وارد کنید." });
-  }
-
-  if (isNaN(wsPort) || wsPort < 1 || wsPort > 65535) {
-    return res.status(400).json({ error: "شماره پورت وب نامعتبر است." });
-  }
-
-  const results = {
-    targetHost,
-    wsPort,
-    udpPort,
-    httpReachable: false,
-    udpReachable: false,
-    latencyMs: 0,
-    timestamp: Date.now(),
-  };
-
-  const startTime = Date.now();
-
-  // 1. Strictly test TCP socket connectivity to targetHost:wsPort (No fallback to 127.0.0.1!)
-  try {
-    const net = require("net");
-    await new Promise((resolve, reject) => {
-      const sock = new net.Socket();
-      sock.setTimeout(3000);
-      sock.on("connect", () => {
-        sock.destroy();
-        results.httpReachable = true;
-        resolve();
-      });
-      sock.on("timeout", () => {
-        sock.destroy();
-        reject(new Error(`مهلت اتصال به ${targetHost}:${wsPort} پایان یافت (Timeout)`));
-      });
-      sock.on("error", (err) => {
-        sock.destroy();
-        reject(new Error(`اتصال به ${targetHost}:${wsPort} ناموفق بود: ${err.message}`));
-      });
-      sock.connect(wsPort, targetHost);
-    });
-  } catch (err) {
-    results.httpError = err.message;
-  }
-
-  // 2. Strictly test UDP reachability with timeout
-  if (!isNaN(udpPort) && udpPort > 0 && udpPort <= 65535) {
-    try {
-      const client = dgram.createSocket("udp4");
-      const pingMsg = Buffer.from(JSON.stringify({ type: "PING", test: true }));
-
-      await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          client.close();
-          results.udpReachable = false;
-          results.udpError = `پاسخی از پورت UDP ${udpPort} روی ${targetHost} دریافت نشد`;
-          resolve();
-        }, 1500);
-
-        client.on("message", (msg) => {
-          try {
-            const resObj = JSON.parse(msg.toString());
-            if (resObj && resObj.type === "PONG") {
-              clearTimeout(timer);
-              results.udpReachable = true;
-              client.close();
-              resolve();
-            }
-          } catch (e) {}
-        });
-
-        client.send(pingMsg, udpPort, targetHost, (err) => {
-          if (err) {
-            clearTimeout(timer);
-            results.udpError = err.message;
-            client.close();
-            resolve();
-          }
-        });
-      });
-    } catch (err) {
-      results.udpError = err.message;
-    }
-  }
-
-  results.latencyMs = Date.now() - startTime;
-  results.success = results.httpReachable;
-
-  res.json(results);
 });
 
 // Public endpoint for participants to check room info before joining

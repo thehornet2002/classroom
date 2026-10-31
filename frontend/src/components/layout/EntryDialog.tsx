@@ -201,7 +201,10 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3500);
-        const probeRes = await fetch(`${proto}//${testHost}:${testPort}/health`, {
+        const probeUrl = testPort === 80 || testPort === 443
+          ? `${proto}//${testHost}/health`
+          : `${proto}//${testHost}:${testPort}/health`;
+        const probeRes = await fetch(probeUrl, {
           signal: controller.signal,
           mode: "cors",
         });
@@ -222,6 +225,26 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
           publicUdpPort: configUdpPort,
         }),
       });
+
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        // Returned HTML (e.g. index.html or 404/502 gateway error)
+        const text = await res.text();
+        if (browserReachable) {
+          setTestResult({
+            success: true,
+            message: `اتصال وب با موفقیت تایید شد. (سرور به پورت ${testPort} پاسخ می‌دهد).`,
+            details: { httpReachable: true },
+          });
+          return;
+        }
+        throw new Error(
+          res.status === 404
+            ? "مسیر /api/config/test یافت نشد. سرویس در چابکان را Redeploy کنید."
+            : `پاسخ نامعتبر از سرور (کد ${res.status}). سرور به جای JSON صفحه HTML بازگرداند.`
+        );
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "خطا در تست اتصال");
 

@@ -35,6 +35,8 @@ export function useWebSocket(url: string | null) {
     setUserMediaState,
     setIsRecording,
     addCompletedRecording,
+    setPing,
+    setPeerPing,
   } = useRoomStore();
 
   const sendMessage = useCallback((msg: WSMessage) => {
@@ -65,15 +67,15 @@ export function useWebSocket(url: string | null) {
         if (!isMounted) return;
         setWsConnected(true);
 
-        // Heartbeat ping every 8 seconds to keep Cloudflare edge & proxies alive
+        // Latency and heartbeat ping every 3 seconds
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "PING" }));
+            ws.send(JSON.stringify({ type: "PING", clientTime: Date.now() }));
           } else if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
             connect();
           }
-        }, 8000);
+        }, 3000);
       };
 
       ws.onclose = (event) => {
@@ -105,10 +107,29 @@ export function useWebSocket(url: string | null) {
               setAdmission(false, msg.message);
               break;
 
+            case "ADMISSION_APPROVED": {
+              setAdmission(true);
+              const curRoom = useRoomStore.getState().roomState?.roomId;
+              if (msg.token) {
+                if (curRoom) {
+                  document.cookie = `classroom_admit_${curRoom}=${msg.token}; path=/; max-age=86400`;
+                  localStorage.setItem(`classroom_admit_${curRoom}`, msg.token);
+                }
+                localStorage.setItem(`classroom_last_token`, msg.token);
+              }
+              break;
+            }
+
             case "ROOM_STATE":
               setAdmission(true);
               setRoomState(msg.state);
-              // Connect WebRTC to existing admitted users if any stream active
+              if (msg.state.roomId) {
+                const lastToken = localStorage.getItem(`classroom_last_token`);
+                if (lastToken) {
+                  document.cookie = `classroom_admit_${msg.state.roomId}=${lastToken}; path=/; max-age=86400`;
+                  localStorage.setItem(`classroom_admit_${msg.state.roomId}`, lastToken);
+                }
+              }
               break;
 
             case "USER_JOINED":
@@ -232,6 +253,20 @@ export function useWebSocket(url: string | null) {
 
             case "SIGNAL_ICE":
               webrtc.handleIceCandidate(msg.senderId, msg.candidate);
+              break;
+
+            case "PONG":
+              if (msg.clientTime) {
+                const latency = Date.now() - msg.clientTime;
+                setPing(latency);
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: "PING_UPDATE", ping: latency }));
+                }
+              }
+              break;
+
+            case "PING_UPDATE":
+              setPeerPing(msg.userId, msg.ping);
               break;
 
             case "UPDATE_TRANSPORT":

@@ -96,7 +96,7 @@ function initSchema() {
     insertConf.run("public_host", process.env.PUBLIC_HOST || "");
     insertConf.run("public_ws_port", process.env.PUBLIC_WS_PORT || "3000");
     insertConf.run("public_udp_port", process.env.PUBLIC_UDP_PORT || "3001");
-    insertConf.run("stun_servers", process.env.STUN_SERVERS || "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302");
+    insertConf.run("stun_servers", process.env.STUN_SERVERS || "");
   }
 
   // Seed default admin and sample data if users table is empty

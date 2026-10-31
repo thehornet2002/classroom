@@ -186,6 +186,7 @@ export type WSMessage =
   | { type: "ADD_USER"; user: RegisteredUser }
   | { type: "DELETE_USER"; username: string }
   | { type: "ADMISSION_REQUIRED"; message: string }
+  | { type: "ADMISSION_APPROVED"; token: string; userId: string }
   | { type: "ADMISSION_DECISION"; targetId: string; approved: boolean }
   | { type: "ROOM_STATE"; state: RoomState }
   | { type: "USER_JOINED"; user: User }
@@ -219,11 +220,14 @@ export type WSMessage =
   | { type: "BREAKOUT_END" }
   | { type: "CLOSE_ROOM"; reason?: string }
   | { type: "ROOM_ENDED"; reason?: string }
+  | { type: "START_RECORDING" }
+  | { type: "STOP_RECORDING" }
   | { type: "RECORDING_STATE"; isRecording: boolean; durationSeconds?: number }
   | { type: "RECORDING_FINISHED"; recordingId: string; title: string; downloadUrl: string }
   | { type: "SIGNAL_OFFER"; targetId: string; senderId: string; sdp: RTCSessionDescriptionInit }
   | { type: "SIGNAL_ANSWER"; targetId: string; senderId: string; sdp: RTCSessionDescriptionInit }
   | { type: "SIGNAL_ICE"; targetId: string; senderId: string; candidate: RTCIceCandidateInit }
   | { type: "UPDATE_TRANSPORT"; transport: TransportConfig }
-  | { type: "PING" }
-  | { type: "PONG" };
+  | { type: "PING_UPDATE"; userId: string; ping: number }
+  | { type: "PING"; clientTime?: number }
+  | { type: "PONG"; clientTime?: number };

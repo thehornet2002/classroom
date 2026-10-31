@@ -25,6 +25,8 @@ interface RoomStoreState {
   currentUser: User | null;
   roomState: RoomState | null;
   transport: TransportConfig;
+  ping: number;
+  peerPings: Record<string, number>;
 
   // Media
   isMicOn: boolean;
@@ -56,6 +58,8 @@ interface RoomStoreState {
   // Actions
   setWsConnected: (connected: boolean) => void;
   setAdmission: (admitted: boolean, message?: string) => void;
+  setPing: (ping: number) => void;
+  setPeerPing: (peerId: string, ping: number) => void;
   setCurrentUser: (user: User | null) => void;
   setRoomState: (state: RoomState) => void;
   setTransport: (transport: TransportConfig) => void;
@@ -103,6 +107,8 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
     video: "udp",
     data: "udp",
   },
+  ping: 0,
+  peerPings: {},
 
   isMicOn: false,
   isCamOn: false,
@@ -127,6 +133,9 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
   setWsConnected: (connected) => set({ wsConnected: connected }),
   setAdmission: (admitted, message = "") =>
     set({ isAdmitted: admitted, admissionMessage: message }),
+  setPing: (ping) => set({ ping }),
+  setPeerPing: (peerId, ping) =>
+    set((prev) => ({ peerPings: { ...prev.peerPings, [peerId]: ping } })),
   setCurrentUser: (user) => set({ currentUser: user }),
   setRoomState: (state) => {
     const current = get().currentUser;

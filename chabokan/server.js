@@ -253,7 +253,7 @@ app.get("/api/config", (req, res) => {
     publicHost: host,
     publicWsPort: wsPort,
     publicUdpPort: udpPort,
-    stunServers: stunServers.length > 0 ? stunServers : ["stun:stun.l.google.com:19302"],
+    stunServers,
   });
 });
 
@@ -270,6 +270,88 @@ app.post("/api/config", authenticateToken, requireRole("admin"), (req, res) => {
   }
 
   res.json({ success: true, message: "تنظیمات سرور چابکان با موفقیت ذخیره شد." });
+});
+
+// Test network & port connectivity for Chabokan configuration
+app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req, res) => {
+  const { publicHost, publicWsPort, publicUdpPort } = req.body;
+  const targetHost = (publicHost && publicHost.trim()) || req.hostname || "127.0.0.1";
+  const wsPort = parseInt(publicWsPort, 10) || 3000;
+  const udpPort = parseInt(publicUdpPort, 10) || 3001;
+
+  const results = {
+    targetHost,
+    wsPort,
+    udpPort,
+    httpReachable: false,
+    udpReachable: false,
+    latencyMs: 0,
+    timestamp: Date.now(),
+  };
+
+  const startTime = Date.now();
+
+  // 1. Test TCP/HTTP connectivity to the specified wsPort
+  try {
+    const net = require("net");
+    await new Promise((resolve, reject) => {
+      const sock = new net.Socket();
+      sock.setTimeout(2500);
+      sock.on("connect", () => {
+        sock.destroy();
+        results.httpReachable = true;
+        resolve();
+      });
+      sock.on("timeout", () => {
+        sock.destroy();
+        reject(new Error("مهلت اتصال به پورت وب " + wsPort + " پایان یافت"));
+      });
+      sock.on("error", (err) => {
+        sock.destroy();
+        reject(err);
+      });
+      sock.connect(wsPort, targetHost === "localhost" ? "127.0.0.1" : targetHost);
+    });
+  } catch (err) {
+    results.httpError = err.message;
+  }
+
+  // 2. Test UDP connectivity to the specified udpPort
+  try {
+    const client = dgram.createSocket("udp4");
+    const pingMsg = Buffer.from(JSON.stringify({ type: "PING", test: true }));
+
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        client.close();
+        results.udpReachable = true;
+        resolve();
+      }, 1200);
+
+      client.on("message", () => {
+        clearTimeout(timer);
+        results.udpReachable = true;
+        client.close();
+        resolve();
+      });
+
+      client.send(pingMsg, udpPort, targetHost === "localhost" ? "127.0.0.1" : targetHost, (err) => {
+        if (err) {
+          clearTimeout(timer);
+          results.udpError = err.message;
+          client.close();
+          resolve();
+        }
+      });
+    });
+  } catch (err) {
+    results.udpError = err.message;
+  }
+
+  results.latencyMs = Date.now() - startTime;
+  results.success = results.httpReachable || results.udpReachable;
+
+  res.json(results);
 });
 
 // Public endpoint for participants to check room info before joining
@@ -380,6 +462,7 @@ server.on("upgrade", (req, socket, head) => {
       const userId = parsedUrl.searchParams.get("userId") || `${Date.now()}-${Math.random()}`;
       const token = parsedUrl.searchParams.get("token");
       const pass = parsedUrl.searchParams.get("pass") || "";
+      const admitToken = parsedUrl.searchParams.get("admitToken") || "";
 
       let username = parsedUrl.searchParams.get("username") || "guest";
       let name = parsedUrl.searchParams.get("name") || username;
@@ -428,7 +511,7 @@ server.on("upgrade", (req, socket, head) => {
 
       const roomTitle = (dbRoom && dbRoom.title) || (isTeacherOrAdmin ? `کلاس مدیر ${name}` : null);
       const room = getOrCreateRoom(roomId, roomTitle, dbRoom ? dbRoom.host_pass : pass, transportConfig);
-      room.handlePeerJoin(ws, userId, username, name, role, isTeacherOrAdmin);
+      room.handlePeerJoin(ws, userId, username, name, role, isTeacherOrAdmin, admitToken);
     });
   } else {
     socket.destroy();

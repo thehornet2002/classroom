@@ -68,11 +68,12 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   const [recordingsList, setRecordingsList] = useState<any[]>([]);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
 
-  const { isRecording, isUploading, recordingTimeStr, startRecording, stopRecording } = useMeetingRecorder(sendMessage);
+  const { isRecording, recordingTimeStr, startRecording, stopRecording } = useMeetingRecorder(sendMessage);
 
   const transport = useRoomStore((s) => s.transport);
   const setTransport = useRoomStore((s) => s.setTransport);
   const completedRecordings = useRoomStore((s) => s.completedRecordings);
+  const ping = useRoomStore((s) => s.ping);
 
   const fetchRecordings = () => {
     setRecordingsLoading(true);
@@ -213,10 +214,33 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
           )}
         </div>
 
-        {/* Connection status badge */}
-        <div className="flex items-center gap-1 text-[11px] text-adobe-muted">
-          <Wifi className={`w-3.5 h-3.5 ${wsConnected ? "text-emerald-400" : "text-rose-500 animate-pulse"}`} />
-          <span>{wsConnected ? "متصل" : "در حال اتصال..."}</span>
+        {/* Connection status badge with latency ping (Requirement 2) */}
+        <div
+          className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium border ${
+            !wsConnected
+              ? "bg-rose-950/60 border-rose-800 text-rose-400 animate-pulse"
+              : ping > 300
+              ? "bg-amber-950/60 border-amber-800 text-amber-300 animate-pulse"
+              : ping > 120
+              ? "bg-blue-950/40 border-blue-800 text-blue-300"
+              : "bg-emerald-950/40 border-emerald-800 text-emerald-400"
+          }`}
+          title={
+            !wsConnected
+              ? "در حال اتصال به سرور..."
+              : ping > 300
+              ? "کیفیت ارتباط ضعیف است (تاخیر بالا)"
+              : "ارتباط پایدار و عالی"
+          }
+        >
+          <Wifi className="w-3.5 h-3.5" />
+          <span>
+            {wsConnected
+              ? ping > 0
+                ? `${ping}ms (${ping > 300 ? "ارتباط ضعیف" : ping > 120 ? "متوسط" : "عالی"})`
+                : "متصل"
+              : "در حال اتصال..."}
+          </span>
         </div>
 
         {/* Realtime Transport Indicator & Host Controls */}

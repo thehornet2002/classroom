@@ -1,6 +1,7 @@
 import { RTC_CONFIG } from "./stunServers";
 import { useRoomStore } from "../stores/roomStore";
 import { WSMessage } from "../types";
+import { audioManager } from "./audioManager";
 
 // Optimize SDP for high-clarity voice and jitter resistance
 function optimizeOpusSdp(sdp: string): string {
@@ -81,6 +82,15 @@ export class WebRTCManager {
       const senders = pc.getSenders();
 
       // Handle video track
+      const videoTransceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === "video");
+      if (videoTransceiver) {
+        const targetDirection = newVideoTrack ? "sendrecv" : "recvonly";
+        if (videoTransceiver.direction !== targetDirection) {
+          videoTransceiver.direction = targetDirection;
+          needRenegotiate = true;
+        }
+      }
+
       const videoSender = senders.find((s) => s.track?.kind === "video") || senders.find((s) => !s.track);
       if (videoSender) {
         try {
@@ -96,6 +106,15 @@ export class WebRTCManager {
       }
 
       // Handle audio track
+      const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === "audio");
+      if (audioTransceiver) {
+        const targetDirection = newAudioTrack ? "sendrecv" : "recvonly";
+        if (audioTransceiver.direction !== targetDirection) {
+          audioTransceiver.direction = targetDirection;
+          needRenegotiate = true;
+        }
+      }
+
       const audioSender = senders.find((s) => s.track?.kind === "audio") || senders.find((s) => !s.track);
       if (audioSender) {
         try {
@@ -156,13 +175,13 @@ export class WebRTCManager {
       if (newAudioTrack) {
         pc.addTrack(newAudioTrack, this.localAudioStream!);
       } else {
-        pc.addTransceiver("audio", { direction: "sendrecv" });
+        pc.addTransceiver("audio", { direction: "recvonly" });
       }
 
       if (newVideoTrack) {
         pc.addTrack(newVideoTrack, this.localStream!);
       } else {
-        pc.addTransceiver("video", { direction: "sendrecv" });
+        pc.addTransceiver("video", { direction: "recvonly" });
       }
     } catch (e) {}
 
@@ -191,11 +210,21 @@ export class WebRTCManager {
     };
 
     pc.ontrack = (event) => {
+      // Direct high-reliability audio routing
+      if (event.track.kind === "audio") {
+        audioManager.playRemoteAudio(peerId, event.track);
+        event.track.onended = () => {
+          audioManager.stopRemoteAudio(peerId);
+        };
+        return;
+      }
+
+      // Video tracks
       let stream = event.streams[0];
       if (!stream) {
         stream = new MediaStream([event.track]);
       } else {
-        stream = new MediaStream(stream.getTracks());
+        stream = new MediaStream(stream.getTracks().filter((t) => t.kind === "video"));
       }
 
       event.track.onended = () => {
@@ -293,6 +322,7 @@ export class WebRTCManager {
   }
 
   closePeer(peerId: string) {
+    audioManager.stopRemoteAudio(peerId);
     const dc = this.dataChannels.get(peerId);
     if (dc) {
       try { dc.close(); } catch (e) {}
@@ -307,6 +337,7 @@ export class WebRTCManager {
   }
 
   closeAll() {
+    audioManager.stopAll();
     for (const [peerId, dc] of this.dataChannels.entries()) {
       try { dc.close(); } catch (e) {}
     }

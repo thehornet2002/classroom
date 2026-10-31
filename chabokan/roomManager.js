@@ -76,6 +76,12 @@ class Room {
     this.chatMessages = [];
 
     this.peers = new Map(); // userId -> { ws, user }
+    this.admittedTokens = new Map(); // admitToken -> { userId, name }
+  }
+
+  isTokenAdmitted(token) {
+    if (!token) return false;
+    return this.admittedTokens.has(token);
   }
 
   getState() {
@@ -132,11 +138,12 @@ class Room {
     }
   }
 
-  handlePeerJoin(ws, userId, username, name, role, isTeacherOrAdmin = false) {
+  handlePeerJoin(ws, userId, username, name, role, isTeacherOrAdmin = false, admitToken = null) {
     const cleanUsername = sanitizeText(username, 50) || "user";
     const cleanName = sanitizeText(name, 50) || cleanUsername;
     const finalRole = isTeacherOrAdmin ? "host" : "participant";
     const isHost = finalRole === "host";
+    const isPreviouslyAdmitted = this.isTokenAdmitted(admitToken);
 
     const user = {
       id: userId,
@@ -146,7 +153,7 @@ class Room {
       status: "none",
       permissions: getDefaultPermissions(finalRole),
       joinedAt: Date.now(),
-      admitted: isHost, // Only verified hosts/admins auto-admit; guests must be approved
+      admitted: isHost || isPreviouslyAdmitted, // Auto-admit if user has valid reconnect admission token
     };
 
     this.peers.set(userId, { ws, user });
@@ -160,6 +167,16 @@ class Room {
       // Broadcast to host so waiting list updates
       this.broadcastToRoles(["host"], { type: "USER_JOINED", user });
     } else {
+      let activeToken = admitToken;
+      if (!activeToken) {
+        activeToken = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        this.admittedTokens.set(activeToken, { userId, name: cleanName });
+      }
+      this.sendTo(ws, {
+        type: "ADMISSION_APPROVED",
+        token: activeToken,
+        userId,
+      });
       this.sendTo(ws, { type: "ROOM_STATE", state: this.getState() });
       this.broadcast({ type: "USER_JOINED", user }, userId);
     }
@@ -187,8 +204,17 @@ class Room {
 
     switch (msg.type) {
       case "PING":
-        this.sendTo(sender.ws, { type: "PONG" });
+        this.sendTo(sender.ws, { type: "PONG", clientTime: msg.clientTime });
         break;
+
+      case "PING_UPDATE": {
+        this.broadcastToRoles(["host"], {
+          type: "PING_UPDATE",
+          userId: senderId,
+          ping: msg.ping,
+        });
+        break;
+      }
 
       case "ADMISSION_DECISION": {
         if (sender.user.role !== "host") return;
@@ -197,6 +223,16 @@ class Room {
           if (msg.approved) {
             target.user.admitted = true;
             this.users[msg.targetId].admitted = true;
+            const admissionToken = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            this.admittedTokens.set(admissionToken, {
+              userId: target.user.id,
+              name: target.user.name,
+            });
+            this.sendTo(target.ws, {
+              type: "ADMISSION_APPROVED",
+              token: admissionToken,
+              userId: target.user.id,
+            });
             this.sendTo(target.ws, { type: "ROOM_STATE", state: this.getState() });
             this.broadcast({ type: "USER_JOINED", user: target.user }, msg.targetId);
           } else {
@@ -526,15 +562,66 @@ class Room {
         break;
       }
 
-      case "RECORDING_STATE": {
+      case "START_RECORDING": {
         if (sender.user.role !== "host") return;
-        this.broadcast(msg);
+        this.isRecording = true;
+        this.recordingStartedAt = Date.now();
+        this.currentRecordingId = `rec_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        this.broadcast({ type: "RECORDING_STATE", isRecording: true });
         break;
       }
 
-      case "RECORDING_FINISHED": {
-        if (sender.user.role !== "host") return;
-        this.broadcast(msg);
+      case "STOP_RECORDING": {
+        if (sender.user.role !== "host" || !this.isRecording) return;
+        const durationSec = Math.max(1, Math.round((Date.now() - (this.recordingStartedAt || Date.now())) / 1000));
+        const recId = this.currentRecordingId || `rec_${Date.now()}`;
+        const filename = `${recId}.webm`;
+        const recTitle = `${this.roomName} - ${new Date().toLocaleDateString("fa-IR")}`;
+        const teacherName = sender.user.name || "مدیر کلاس";
+
+        try {
+          const { db } = require("./db");
+          const fs = require("fs");
+          const path = require("path");
+          const recDir = path.join(__dirname, "recordings");
+          if (!fs.existsSync(recDir)) fs.mkdirSync(recDir, { recursive: true });
+          const filePath = path.join(recDir, filename);
+
+          const summaryData = {
+            id: recId,
+            roomId: this.roomId,
+            roomName: this.roomName,
+            teacherName,
+            durationSeconds: durationSec,
+            recordedAt: Date.now(),
+            totalChatMessages: this.chatMessages.length,
+            whiteboardPages: this.whiteboardPage,
+            strokesCount: this.whiteboardStrokes.length,
+            status: "completed",
+          };
+          fs.writeFileSync(filePath, JSON.stringify(summaryData, null, 2));
+          const stat = fs.statSync(filePath);
+
+          db.prepare(`
+            INSERT INTO recordings (id, session_id, course_id, title, filename, filesize, duration_seconds, teacher_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(recId, this.roomId, "c_general", recTitle, filename, stat.size, durationSec, teacherName, Date.now());
+        } catch (err) {
+          console.error("Error creating server recording:", err);
+        }
+
+        this.isRecording = false;
+        this.recordingStartedAt = null;
+        this.currentRecordingId = null;
+
+        const downloadUrl = `/api/recordings/${recId}/download`;
+        this.broadcast({
+          type: "RECORDING_FINISHED",
+          recordingId: recId,
+          title: recTitle,
+          downloadUrl,
+        });
+        this.broadcast({ type: "RECORDING_STATE", isRecording: false });
         break;
       }
 

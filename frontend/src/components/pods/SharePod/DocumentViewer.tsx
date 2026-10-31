@@ -18,6 +18,7 @@ import {
   Trash2,
   Loader2,
   Compass,
+  X,
 } from "lucide-react";
 import { useRoomStore } from "../../../stores/roomStore";
 import { DocumentStroke, WSMessage } from "../../../types";
@@ -63,8 +64,19 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const annotCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pdfDocRef = useRef<any>(null);
   const renderTaskRef = useRef<any>(null);
+
+  const handleCloseDocument = () => {
+    if (!isPresenterOrHost) return;
+    if (confirm("آیا مایلید نمایش این سند را ببندید؟")) {
+      pdfDocRef.current = null;
+      useRoomStore.getState().setDocumentState(null);
+      sendMessage({ type: "DOC_CHANGE", docState: null as any });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   // Determine effective display parameters
   const effectiveSyncMode = docState?.syncMode || "sync";
@@ -301,6 +313,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
 
       setTimeout(() => {
         setUploadProgress(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
 
         const newDocState = {
           docUrl: dataUrl,
@@ -624,18 +637,32 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
             </button>
           )}
 
-          {/* Upload Button (Host only) */}
+          {/* Upload & Close Buttons (Host only) */}
           {isPresenterOrHost && (
-            <label className="flex items-center gap-1.5 bg-adobe-accent hover:bg-blue-600 text-white px-3 py-1 rounded-md cursor-pointer text-[11px] font-semibold transition shadow-sm">
-              <FileUp className="w-3.5 h-3.5" />
-              <span>{docState?.docUrl ? "تغییر فایل" : "آپلود فایل PDF / اسلاید"}</span>
-              <input
-                type="file"
-                accept=".pdf,.png,.jpg,.jpeg,.webp"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-            </label>
+            <div className="flex items-center gap-1">
+              <label className="flex items-center gap-1.5 bg-adobe-accent hover:bg-blue-600 text-white px-3 py-1 rounded-md cursor-pointer text-[11px] font-semibold transition shadow-sm">
+                <FileUp className="w-3.5 h-3.5" />
+                <span>{docState?.docUrl ? "تغییر فایل" : "آپلود فایل PDF / اسلاید"}</span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+
+              {docState?.docUrl && (
+                <button
+                  type="button"
+                  onClick={handleCloseDocument}
+                  className="p-1 rounded bg-adobe-bar hover:bg-rose-950/60 text-adobe-muted hover:text-rose-300 border border-adobe-border"
+                  title="بستن و حذف سند جاری"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>

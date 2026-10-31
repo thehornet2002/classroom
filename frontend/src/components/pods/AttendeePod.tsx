@@ -29,7 +29,7 @@ interface AttendeePodProps {
 }
 
 export const AttendeePod: React.FC<AttendeePodProps> = ({ sendMessage }) => {
-  const { roomState, currentUser } = useRoomStore();
+  const { roomState, currentUser, peerPings, ping } = useRoomStore();
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState({
     hosts: true,
@@ -139,6 +139,26 @@ export const AttendeePod: React.FC<AttendeePodProps> = ({ sendMessage }) => {
 
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {renderStatusBadge(user)}
+
+          {/* User Latency / Ping Badge (Requirement 2) */}
+          {(() => {
+            const userPing = isMe ? ping : peerPings[user.id];
+            if (userPing === undefined || userPing === 0) return null;
+            return (
+              <span
+                className={`px-1 py-0.5 rounded text-[9px] font-mono font-bold ${
+                  userPing > 300
+                    ? "bg-rose-950/80 text-rose-300 border border-rose-800"
+                    : userPing > 120
+                    ? "bg-amber-950/80 text-amber-300 border border-amber-800"
+                    : "bg-emerald-950/60 text-emerald-300 border border-emerald-800/60"
+                }`}
+                title={`تاخیر پینگ کاربر: ${userPing}ms ${userPing > 300 ? "(ارتباط ضعیف)" : ""}`}
+              >
+                {userPing}ms
+              </span>
+            );
+          })()}
 
           {/* Media permission badges */}
           <div className="flex items-center gap-1 text-adobe-muted">

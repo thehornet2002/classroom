@@ -21,6 +21,8 @@ import {
   Settings,
   Sliders,
   X,
+  CheckCircle,
+  RefreshCw,
 } from "lucide-react";
 import { TransportConfig, UserRole } from "../../types";
 
@@ -110,9 +112,15 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   const [configHost, setConfigHost] = useState("");
   const [configWsPort, setConfigWsPort] = useState(3000);
   const [configUdpPort, setConfigUdpPort] = useState(3001);
-  const [configStun, setConfigStun] = useState("stun:stun.l.google.com:19302");
+  const [configStun, setConfigStun] = useState("");
   const [configNotice, setConfigNotice] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
+  const [isTestingPorts, setIsTestingPorts] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    message: string;
+    details?: any;
+  } | null>(null);
 
   const fetchServerConfig = () => {
     fetch("/api/config")
@@ -156,6 +164,47 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
       alert(err.message || "خطا در ذخیره تنظیمات");
     } finally {
       setConfigSaving(false);
+    }
+  };
+
+  const handleTestPorts = async () => {
+    setIsTestingPorts(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/config/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          publicHost: configHost.trim(),
+          publicWsPort: configWsPort,
+          publicUdpPort: configUdpPort,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "خطا در تست اتصال");
+      if (data.success) {
+        setTestResult({
+          success: true,
+          message: `ارتباط با پورت‌های سرور با موفقیت تایید شد (تاخیر: ${data.latencyMs}ms). اتصال به پورت وب ${data.wsPort} و UDP ${data.udpPort} برقرار است.`,
+          details: data,
+        });
+      } else {
+        setTestResult({
+          success: false,
+          message: `امکان اتصال به پورت‌های مشخص‌شده فراهم نشد. (پورت وب: ${data.wsPort}، پورت UDP: ${data.udpPort}). خطا: ${data.httpError || data.udpError || "پورت در دسترس نیست"}`,
+          details: data,
+        });
+      }
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: err.message || "خطا در ارسال پکت‌های تست به سرور",
+      });
+    } finally {
+      setIsTestingPorts(false);
     }
   };
 
@@ -825,6 +874,26 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
                 </div>
               )}
 
+              {testResult && (
+                <div
+                  className={`p-3 rounded-xl border text-xs flex flex-col gap-1.5 animate-fadeIn ${
+                    testResult.success
+                      ? "bg-emerald-950/70 border-emerald-600 text-emerald-200"
+                      : "bg-rose-950/70 border-rose-600 text-rose-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold">
+                    {testResult.success ? (
+                      <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                    )}
+                    <span>{testResult.success ? "نتیجه تست اتصال: موفق" : "نتیجه تست اتصال: ناموفق"}</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed opacity-90">{testResult.message}</p>
+                </div>
+              )}
+
               <form onSubmit={handleSaveConfig} className="space-y-3 text-xs">
                 <div>
                   <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
@@ -879,26 +948,42 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
                     type="text"
                     value={configStun}
                     onChange={(e) => setConfigStun(e.target.value)}
-                    placeholder="stun:stun.l.google.com:19302"
+                    placeholder="اختیاری: مثلاً stun:your-domain.ir:3478 یا خالی برای اتصال مستقیم"
                     className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
                   />
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-adobe-border">
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-adobe-border">
                   <button
                     type="button"
-                    onClick={() => setShowConfigModal(false)}
-                    className="px-3 py-1.5 rounded bg-adobe-bar text-adobe-muted hover:text-white"
+                    onClick={handleTestPorts}
+                    disabled={isTestingPorts}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/70 border border-indigo-700 hover:bg-indigo-900 text-indigo-300 hover:text-white font-bold text-xs transition disabled:opacity-50"
                   >
-                    بستن
+                    {isTestingPorts ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    ) : (
+                      <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                    )}
+                    <span>{isTestingPorts ? "در حال ارسال پکت و تست..." : "تست زنده اتصال پورت‌ها"}</span>
                   </button>
-                  <button
-                    type="submit"
-                    disabled={configSaving}
-                    className="px-4 py-1.5 bg-adobe-accent hover:bg-blue-600 text-white font-bold rounded shadow transition"
-                  >
-                    {configSaving ? "در حال ذخیره..." : "ذخیره تنظیمات"}
-                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowConfigModal(false)}
+                      className="px-3 py-1.5 rounded bg-adobe-bar text-adobe-muted hover:text-white"
+                    >
+                      بستن
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={configSaving}
+                      className="px-4 py-1.5 bg-adobe-accent hover:bg-blue-600 text-white font-bold rounded shadow transition"
+                    >
+                      {configSaving ? "در حال ذخیره..." : "ذخیره تنظیمات"}
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>

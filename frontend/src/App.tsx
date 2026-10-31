@@ -18,19 +18,6 @@ import { UserManagementModal } from "./components/layout/UserManagementModal";
 import { PodConfig, UserRole } from "./types";
 import { Radio } from "lucide-react";
 
-const RemoteAudioPlayer: React.FC<{ stream: MediaStream }> = ({ stream }) => {
-  const audioRef = React.useRef<HTMLAudioElement | null>(null);
-  React.useEffect(() => {
-    if (audioRef.current && stream) {
-      audioRef.current.srcObject = stream;
-      audioRef.current.play().catch((err) => {
-        console.warn("Autoplay remote audio waiting for user gesture:", err);
-      });
-    }
-  }, [stream]);
-  return <audio ref={audioRef} autoPlay playsInline />;
-};
-
 export function App() {
   const [connectionParams, setConnectionParams] = useState<{
     url: string;
@@ -50,6 +37,7 @@ export function App() {
     breakoutBroadcast,
     wsConnected,
     remoteStreams,
+    ping,
   } = useRoomStore();
 
   const wsUrl = connectionParams?.url || null;
@@ -83,8 +71,14 @@ export function App() {
     if (pass) cleanUrl.searchParams.set("pass", pass);
     if (token) cleanUrl.searchParams.set("token", token);
 
+    const savedAdmitToken = localStorage.getItem(`classroom_admit_${roomId}`) || "";
+    if (savedAdmitToken) {
+      cleanUrl.searchParams.set("admitToken", savedAdmitToken);
+    }
+
     const isHost = role === "host";
-    useRoomStore.getState().setAdmission(isHost);
+    const hasPriorAdmission = isHost || !!savedAdmitToken;
+    useRoomStore.getState().setAdmission(hasPriorAdmission);
 
     setCurrentUser({
       id: userId,
@@ -167,6 +161,16 @@ export function App() {
         </div>
       )}
 
+      {/* Weak Connection Alert (Requirement 2) */}
+      {connectionParams && isAdmitted && ping > 350 && (
+        <div className="bg-rose-950/90 border-b border-rose-800 px-3 py-1 flex items-center justify-between text-xs text-rose-200 z-50">
+          <span className="flex items-center gap-1.5 font-medium">
+            <Radio className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+            <span>کیفیت اتصال اینترنت شما ضعیف است ({ping}ms). ممکن است صدا یا تصویر با تاخیر پخش شود.</span>
+          </span>
+        </div>
+      )}
+
       {/* Top Application Bar */}
       <TopMenuBar
         sendMessage={sendMessage}
@@ -187,15 +191,6 @@ export function App() {
             </PodWrapper>
           ))}
         </main>
-      </div>
-
-      {/* Hidden Global Audio Receivers for all admitted connected speakers */}
-      <div className="hidden">
-        {isAdmitted &&
-          Object.entries(remoteStreams).map(([peerId, stream]) => {
-            if (!roomState?.users[peerId]?.admitted) return null;
-            return <RemoteAudioPlayer key={peerId} stream={stream} />;
-          })}
       </div>
 
       {/* Breakout Rooms Modal */}

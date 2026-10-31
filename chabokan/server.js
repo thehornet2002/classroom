@@ -169,15 +169,33 @@ app.post("/api/lms/sessions", authenticateToken, requireRole("admin", "teacher")
   res.status(201).json(session);
 });
 
-function getFormattedInviteLink(roomId) {
+function getFormattedInviteLink(roomId, req) {
   try {
     const hostRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_host'").get();
     const portRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_ws_port'").get();
-    const host = hostRow?.value || "";
-    const port = portRow?.value || "3000";
-    const portStr = port && port !== "80" && port !== "443" ? `:${port}` : "";
+    const configHost = (hostRow?.value || "").trim();
+    const configPort = parseInt(portRow?.value || "", 10);
+
+    let host = configHost;
+    let proto = "https:";
+    let portStr = "";
+
+    if (req) {
+      const forwardedProto = req.headers["x-forwarded-proto"];
+      proto = forwardedProto ? `${forwardedProto}:` : (req.secure ? "https:" : "http:");
+      if (!host) {
+        host = req.headers["x-forwarded-host"] || req.hostname || "localhost";
+      }
+    }
+
+    if (configPort && configPort !== 80 && configPort !== 443) {
+      portStr = `:${configPort}`;
+    }
+
     if (host) {
-      return `http://${host}${portStr}/?room=${roomId}`;
+      // Remove any trailing slash or protocol prefixes
+      const cleanHost = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      return `${proto}//${cleanHost}${portStr}/?room=${roomId}`;
     }
   } catch (e) {}
   return `/?room=${roomId}`;
@@ -215,7 +233,7 @@ app.post("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req,
       id: roomId,
       title: cleanTitle,
       transport: transportConfig,
-      inviteLink: getFormattedInviteLink(roomId),
+      inviteLink: getFormattedInviteLink(roomId, req),
       createdAt: now,
     },
   });
@@ -231,7 +249,7 @@ app.get("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req, 
       id: r.id,
       title: r.title,
       transport,
-      inviteLink: getFormattedInviteLink(r.id),
+      inviteLink: getFormattedInviteLink(r.id, req),
       activeUsers: activeRoom ? Object.keys(activeRoom.users).length : 0,
       createdAt: r.created_at,
     };

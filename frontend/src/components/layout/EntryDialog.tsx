@@ -131,13 +131,15 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
         if (data.publicUdpPort) setConfigUdpPort(data.publicUdpPort);
         if (data.stunServers) setConfigStun(data.stunServers.join(", "));
 
-        // Construct external public WebSocket URL for all users based on forwarded port
+        // Construct external public WebSocket URL for all users
+        // If domain is HTTPS or on port 443, standard WSS is used without non-standard ports
         const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const extHost = data.publicHost || window.location.hostname;
-        const extPort = data.publicWsPort
-          ? (data.publicWsPort === 80 || data.publicWsPort === 443 ? "" : `:${data.publicWsPort}`)
-          : (window.location.port ? `:${window.location.port}` : "");
-        const computedWsUrl = `${wsProto}//${extHost}${extPort}/ws`;
+        const extHost = (data.publicHost && data.publicHost.trim()) || window.location.hostname;
+        const portNum = Number(data.publicWsPort);
+        const extPort = portNum && portNum !== 80 && portNum !== 443
+          ? `:${portNum}`
+          : (window.location.port && window.location.port !== "80" && window.location.port !== "443" ? `:${window.location.port}` : "");
+        const computedWsUrl = `${wsProto}//${extHost.replace(/^https?:\/\//, "").replace(/\/+$/, "")}${extPort}/ws`;
         setWorkerUrl(computedWsUrl);
         localStorage.setItem("classroom_ws_url", computedWsUrl);
       })
@@ -149,10 +151,14 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   }, []);
 
   const getRoomInviteLink = (roomId: string) => {
-    const portPart = configWsPort && configWsPort !== 80 && configWsPort !== 443 ? `:${configWsPort}` : (window.location.port ? `:${window.location.port}` : "");
-    const hostPart = configHost || window.location.hostname;
-    const protocol = window.location.protocol;
-    return `${protocol}//${hostPart}${portPart}/?room=${roomId}`;
+    // If public domain is provided, always use standard HTTPS link (port 443)
+    if (configHost && configHost.trim()) {
+      const cleanHost = configHost.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      const portPart = configWsPort && configWsPort !== 80 && configWsPort !== 443 ? `:${configWsPort}` : "";
+      return `https://${cleanHost}${portPart}/?room=${roomId}`;
+    }
+    // Fallback to origin without external container forwarding ports
+    return `${window.location.origin}/?room=${roomId}`;
   };
 
   const handleSaveConfig = async (e: React.FormEvent) => {
@@ -984,13 +990,13 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
-                      پورت عمومی وب / WS:
+                      پورت وب / WS (برای دامنه‌های چابکان معمولاً 443):
                     </label>
                     <input
                       type="number"
                       value={configWsPort}
                       onChange={(e) => setConfigWsPort(Number(e.target.value))}
-                      placeholder="3000"
+                      placeholder="443"
                       className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
                     />
                   </div>

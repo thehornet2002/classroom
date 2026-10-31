@@ -16,13 +16,12 @@ import {
   Circle,
   Eraser,
   Trash2,
-  CheckCircle,
   Loader2,
-  Eye,
   Compass,
 } from "lucide-react";
 import { useRoomStore } from "../../../stores/roomStore";
 import { DocumentStroke, WSMessage } from "../../../types";
+import { webrtc } from "../../../lib/webrtc";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.js?url";
 
@@ -43,7 +42,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
 
   const docState = roomState?.documentState;
 
-  // Local view state
+  // Local view state for attendees when in free browse mode
   const [localPage, setLocalPage] = useState<number>(1);
   const [localZoom, setLocalZoom] = useState<number>(100);
   const [isFreeModeAttendee, setIsFreeModeAttendee] = useState<boolean>(false);
@@ -69,26 +68,32 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
 
   // Determine effective display parameters
   const effectiveSyncMode = docState?.syncMode || "sync";
-  const shouldFollowHost = !isPresenterOrHost && (effectiveSyncMode === "sync" || !isFreeModeAttendee);
+  const shouldFollowHost = isPresenterOrHost || effectiveSyncMode === "sync" || !isFreeModeAttendee;
 
   const activePage = shouldFollowHost
-    ? docState?.currentPage || 1
+    ? (docState?.currentPage || 1)
     : localPage;
 
   const activeZoom = shouldFollowHost
-    ? docState?.zoom || 100
+    ? (docState?.zoom || 100)
     : localZoom;
 
   const totalPages = docState?.totalPages || 1;
 
-  // Synchronize Host scroll/pan to attendees
+  // Synchronize Host scroll/pan to attendees (attendees cannot scroll in sync mode)
   useEffect(() => {
-    if (shouldFollowHost && containerRef.current && docState?.panX !== undefined && docState?.panY !== undefined) {
+    if (!isPresenterOrHost && shouldFollowHost && containerRef.current) {
       const container = containerRef.current;
-      container.scrollLeft = docState.panX * (container.scrollWidth - container.clientWidth);
-      container.scrollTop = docState.panY * (container.scrollHeight - container.clientHeight);
+      const maxScrollLeft = container.scrollWidth - container.clientWidth;
+      const maxScrollTop = container.scrollHeight - container.clientHeight;
+      if (docState?.panX !== undefined && maxScrollLeft > 0) {
+        container.scrollLeft = docState.panX * maxScrollLeft;
+      }
+      if (docState?.panY !== undefined && maxScrollTop > 0) {
+        container.scrollTop = docState.panY * maxScrollTop;
+      }
     }
-  }, [shouldFollowHost, docState?.panX, docState?.panY, activeZoom]);
+  }, [isPresenterOrHost, shouldFollowHost, docState?.panX, docState?.panY, activeZoom]);
 
   // Load PDF Document when docUrl changes
   useEffect(() => {
@@ -119,6 +124,11 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
       drawAnnotations();
     }
   }, [activePage, activeZoom]);
+
+  // Redraw annotations whenever strokes or activePage updates
+  useEffect(() => {
+    drawAnnotations();
+  }, [docState?.strokes, activePage]);
 
   const renderCurrentPage = async (pdf: any, pageNum: number, zoomLevel: number) => {
     if (!pdf) return;
@@ -248,7 +258,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
     }
   }, [docState?.strokes, activePage]);
 
-  // Handle file upload with animated progress bar (Requirement 12)
+  // Handle file upload with progress bar
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -314,12 +324,13 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
     reader.readAsDataURL(file);
   };
 
-  // Page Turner
+  // Page Turner: Changes page synchronously for host & updates store
   const changePage = (newPage: number) => {
     const clamped = Math.max(1, Math.min(totalPages, newPage));
     if (isPresenterOrHost) {
       useRoomStore.getState().setDocumentPage(clamped, activeZoom, 0, 0);
       sendMessage({ type: "DOC_PAGE_CHANGE", page: clamped, zoom: activeZoom, panX: 0, panY: 0 });
+      webrtc.sendRealtimeData({ type: "DOC_PAGE_CHANGE", page: clamped, zoom: activeZoom, panX: 0, panY: 0 });
     } else {
       setLocalPage(clamped);
     }
@@ -331,6 +342,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
     if (isPresenterOrHost) {
       useRoomStore.getState().setDocumentPage(activePage, nextZoom, 0, 0);
       sendMessage({ type: "DOC_PAGE_CHANGE", page: activePage, zoom: nextZoom, panX: 0, panY: 0 });
+      webrtc.sendRealtimeData({ type: "DOC_PAGE_CHANGE", page: activePage, zoom: nextZoom, panX: 0, panY: 0 });
     } else {
       setLocalZoom(nextZoom);
     }
@@ -347,6 +359,13 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
     const panY = maxScrollTop > 0 ? container.scrollTop / maxScrollTop : 0;
 
     sendMessage({
+      type: "DOC_PAGE_CHANGE",
+      page: activePage,
+      zoom: activeZoom,
+      panX,
+      panY,
+    });
+    webrtc.sendRealtimeData({
       type: "DOC_PAGE_CHANGE",
       page: activePage,
       zoom: activeZoom,
@@ -467,13 +486,13 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
       size: activeSize,
       start: startPointRef.current,
       end: endPt,
-      points: drawingPointsRef.current,
+      points: [...drawingPointsRef.current],
     };
 
     useRoomStore.getState().addDocumentStroke(stroke);
     sendMessage({ type: "DOC_STROKE", stroke });
+    webrtc.sendRealtimeData({ type: "DOC_STROKE", stroke });
     drawingPointsRef.current = [];
-    drawAnnotations();
   };
 
   const handleClearStrokes = () => {
@@ -481,14 +500,19 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
     if (confirm("آیا یادداشت‌های روی این صفحه پاک شوند؟")) {
       useRoomStore.getState().clearDocumentStrokes(activePage);
       sendMessage({ type: "DOC_CLEAR_STROKES", page: activePage });
+      webrtc.sendRealtimeData({ type: "DOC_CLEAR_STROKES", page: activePage });
       drawAnnotations();
     }
   };
 
   const colors = ["#ef4444", "#3b82f6", "#10b981", "#eab308", "#a855f7", "#ffffff"];
 
+  // Whether user can scroll this container
+  // In sync mode, non-hosts CANNOT scroll (overflow is hidden or user interaction blocked)
+  const isScrollLocked = !isPresenterOrHost && shouldFollowHost;
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-zinc-950 select-none overflow-hidden text-xs">
+    <div className="flex-1 flex flex-col h-full bg-zinc-950 select-none overflow-hidden text-xs" dir="rtl">
       {/* Top Document Control Bar */}
       <div className="h-10 bg-adobe-bar border-b border-adobe-border px-3 flex items-center justify-between">
         {/* Document Title & Sync Mode Indicator */}
@@ -500,7 +524,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
 
           {/* Sync Mode Badge */}
           {docState?.docUrl && (
-            <div className="flex items-center gap-1.5 ml-2">
+            <div className="flex items-center gap-1.5 mr-2">
               {isPresenterOrHost ? (
                 <button
                   onClick={toggleSyncMode}
@@ -512,7 +536,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
                   title="کلیک برای تغییر حالت ارائه همگام یا مطالعه آزاد برای دانشجویان"
                 >
                   {effectiveSyncMode === "sync" ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                  <span>{effectiveSyncMode === "sync" ? "حالت همگام (Follow Host)" : "مطالعه آزاد (Free)"}</span>
+                  <span>{effectiveSyncMode === "sync" ? "حالت همگام (قفل صفحه برای کلاس)" : "مطالعه آزاد (Free)"}</span>
                 </button>
               ) : (
                 <span
@@ -523,7 +547,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
                   }`}
                 >
                   {shouldFollowHost ? <Lock className="w-3 h-3" /> : <Compass className="w-3 h-3" />}
-                  <span>{shouldFollowHost ? "دنبال کردن استاد" : "مطالعه آزاد"}</span>
+                  <span>{shouldFollowHost ? "همگام با استاد (اسکرول قفل است)" : "مطالعه آزاد"}</span>
                 </span>
               )}
             </div>
@@ -531,7 +555,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
         </div>
 
         {/* Presentation Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" dir="ltr">
           {docState?.docUrl && (
             <>
               {/* Zoom Controls */}
@@ -616,7 +640,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
         </div>
       </div>
 
-      {/* Annotation Toolbar (Host only in Sync mode) */}
+      {/* Annotation Toolbar (Host only) */}
       {isPresenterOrHost && docState?.docUrl && (
         <div className="h-8 bg-adobe-bar/90 border-b border-adobe-border px-3 flex items-center justify-between text-xs select-none">
           <div className="flex items-center gap-1">
@@ -701,7 +725,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
           <button
             onClick={handleClearStrokes}
             className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300"
-            title="پاک کردن نشانه‌های این صفحه"
+            title="پاک کردن یادداشت‌های این صفحه"
           >
             <Trash2 className="w-3 h-3" />
             <span>پاک کردن یادداشت‌ها</span>
@@ -713,9 +737,17 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
       <div
         ref={containerRef}
         onScroll={handleHostScroll}
-        className="flex-1 overflow-auto flex items-start justify-center p-4 bg-zinc-900 relative"
+        onWheel={(e) => {
+          if (isScrollLocked) e.preventDefault();
+        }}
+        onTouchMove={(e) => {
+          if (isScrollLocked) e.preventDefault();
+        }}
+        className={`flex-1 flex items-start justify-center p-4 bg-zinc-900 relative ${
+          isScrollLocked ? "overflow-hidden select-none pointer-events-auto" : "overflow-auto"
+        }`}
       >
-        {/* Upload Progress View (Requirement 12) */}
+        {/* Upload Progress View */}
         {uploadProgress !== null ? (
           <div className="flex flex-col items-center justify-center p-8 bg-adobe-pod border border-adobe-border rounded-xl shadow-2xl max-w-sm w-full my-auto">
             <Loader2 className="w-10 h-10 text-adobe-accent animate-spin mb-3" />
@@ -766,8 +798,8 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
         ) : (
           /* Active Document Surface */
           <div className="relative shadow-2xl rounded border border-adobe-border overflow-hidden bg-white">
-            {/* Underlying PDF / Image Canvas */}
-            <canvas ref={pdfCanvasRef} className="block select-none" />
+            {/* Underlying PDF Canvas */}
+            <canvas ref={pdfCanvasRef} className="block select-none pointer-events-none" />
 
             {/* If presentation is an image */}
             {(!docState.docUrl.startsWith("data:application/pdf") && !docState.docName?.toLowerCase().endsWith(".pdf")) && (
@@ -785,19 +817,19 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ sendMessage }) =
                     drawAnnotations();
                   }
                 }}
-                className="block max-w-none select-none"
+                className="block max-w-none select-none pointer-events-none"
                 style={{ width: `${activeZoom}%`, minWidth: "100%" }}
               />
             )}
 
-            {/* Annotations & Whiteboard Overlay Canvas */}
+            {/* Annotations Overlay Canvas */}
             <canvas
               ref={annotCanvasRef}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               className={`absolute top-0 left-0 w-full h-full z-10 ${
-                isPresenterOrHost ? "cursor-crosshair" : "cursor-default"
+                isPresenterOrHost ? "cursor-crosshair pointer-events-auto" : "cursor-default pointer-events-none"
               }`}
             />
           </div>

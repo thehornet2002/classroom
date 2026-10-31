@@ -32,6 +32,9 @@ export function useWebSocket(url: string | null) {
     addDocumentStroke,
     clearDocumentStrokes,
     setTransport,
+    setUserMediaState,
+    setIsRecording,
+    addCompletedRecording,
   } = useRoomStore();
 
   const sendMessage = useCallback((msg: WSMessage) => {
@@ -233,6 +236,28 @@ export function useWebSocket(url: string | null) {
 
             case "UPDATE_TRANSPORT":
               setTransport(msg.transport);
+              break;
+
+            case "MEDIA_STATE":
+              setUserMediaState(msg.userId, msg.mediaState);
+              break;
+
+            case "RECORDING_STATE":
+              setIsRecording(msg.isRecording);
+              break;
+
+            case "RECORDING_FINISHED":
+              addCompletedRecording({
+                id: msg.recordingId,
+                title: msg.title,
+                downloadUrl: msg.downloadUrl,
+                createdAt: Date.now(),
+              });
+              break;
+
+            case "ROOM_ENDED":
+              alert(msg.reason || "کلاس توسط مدیر به پایان رسید.");
+              window.location.href = window.location.pathname;
               break;
           }
         } catch (e) {

@@ -31,8 +31,16 @@ interface RoomStoreState {
   isCamOn: boolean;
   isScreenSharing: boolean;
   localStream: MediaStream | null;
+  localCamStream: MediaStream | null;
+  localScreenStream: MediaStream | null;
   localAudioStream: MediaStream | null;
   remoteStreams: Record<string, MediaStream>; // peerId -> stream
+  userMediaStates: Record<string, { isMicOn: boolean; isCamOn: boolean; isScreenOn: boolean }>;
+
+  // Server Recording
+  isRecording: boolean;
+  recordingSeconds: number;
+  completedRecordings: { id: string; title: string; downloadUrl: string; createdAt: number }[];
 
   // Chat
   chatMessages: ChatMessage[];
@@ -73,9 +81,15 @@ interface RoomStoreState {
   setBreakoutBroadcast: (msg: string | null) => void;
   setPrepareMode: (enabled: boolean) => void;
   setMediaDevicesState: (mic: boolean, cam: boolean, screen: boolean) => void;
+  setUserMediaState: (userId: string, mediaState: { isMicOn: boolean; isCamOn: boolean; isScreenOn: boolean }) => void;
   setLocalStream: (stream: MediaStream | null) => void;
+  setLocalCamStream: (stream: MediaStream | null) => void;
+  setLocalScreenStream: (stream: MediaStream | null) => void;
   setLocalAudioStream: (stream: MediaStream | null) => void;
   setRemoteStream: (peerId: string, stream: MediaStream | null) => void;
+  setIsRecording: (recording: boolean) => void;
+  setRecordingSeconds: (seconds: number) => void;
+  addCompletedRecording: (rec: { id: string; title: string; downloadUrl: string; createdAt: number }) => void;
 }
 
 export const useRoomStore = create<RoomStoreState>((set, get) => ({
@@ -94,8 +108,15 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
   isCamOn: false,
   isScreenSharing: false,
   localStream: null,
+  localCamStream: null,
+  localScreenStream: null,
   localAudioStream: null,
   remoteStreams: {},
+  userMediaStates: {},
+
+  isRecording: false,
+  recordingSeconds: 0,
+  completedRecordings: [],
 
   chatMessages: [],
   activeChannel: "everyone",
@@ -391,8 +412,23 @@ export const useRoomStore = create<RoomStoreState>((set, get) => ({
   setPrepareMode: (enabled) => set({ prepareMode: enabled }),
   setMediaDevicesState: (mic, cam, screen) =>
     set({ isMicOn: mic, isCamOn: cam, isScreenSharing: screen }),
+  setUserMediaState: (userId, mediaState) =>
+    set((prev) => ({
+      userMediaStates: {
+        ...prev.userMediaStates,
+        [userId]: mediaState,
+      },
+    })),
   setLocalStream: (stream) => set({ localStream: stream }),
+  setLocalCamStream: (stream) => set({ localCamStream: stream }),
+  setLocalScreenStream: (stream) => set({ localScreenStream: stream }),
   setLocalAudioStream: (stream) => set({ localAudioStream: stream }),
+  setIsRecording: (recording) => set({ isRecording: recording }),
+  setRecordingSeconds: (seconds) => set({ recordingSeconds: seconds }),
+  addCompletedRecording: (rec) =>
+    set((prev) => ({
+      completedRecordings: [rec, ...prev.completedRecordings.filter((r) => r.id !== rec.id)],
+    })),
   setRemoteStream: (peerId, stream) => {
     const { remoteStreams } = get();
     if (!stream) {

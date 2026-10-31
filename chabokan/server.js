@@ -232,6 +232,46 @@ app.delete("/api/rooms/:id", authenticateToken, requireRole("admin", "teacher"),
   res.json({ success: true, message: "اتاق با موفقیت بسته شد." });
 });
 
+// ==========================================
+// 2.6 Chabokan Server & Port Configuration
+// ==========================================
+app.get("/api/config", (req, res) => {
+  const rows = db.prepare("SELECT key, value FROM server_config").all();
+  const config = {};
+  for (const row of rows) {
+    config[row.key] = row.value;
+  }
+  const host = config.public_host || req.hostname || "localhost";
+  const wsPort = parseInt(config.public_ws_port || "3000", 10);
+  const udpPort = parseInt(config.public_udp_port || "3001", 10);
+  const stunServers = (config.stun_servers || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  res.json({
+    publicHost: host,
+    publicWsPort: wsPort,
+    publicUdpPort: udpPort,
+    stunServers: stunServers.length > 0 ? stunServers : ["stun:stun.l.google.com:19302"],
+  });
+});
+
+app.post("/api/config", authenticateToken, requireRole("admin"), (req, res) => {
+  const { publicHost, publicWsPort, publicUdpPort, stunServers } = req.body;
+  const updateStmt = db.prepare("INSERT OR REPLACE INTO server_config (key, value) VALUES (?, ?)");
+
+  if (publicHost !== undefined) updateStmt.run("public_host", sanitizeText(publicHost, 200));
+  if (publicWsPort !== undefined) updateStmt.run("public_ws_port", String(parseInt(publicWsPort, 10) || 3000));
+  if (publicUdpPort !== undefined) updateStmt.run("public_udp_port", String(parseInt(publicUdpPort, 10) || 3001));
+  if (stunServers !== undefined) {
+    const stunStr = Array.isArray(stunServers) ? stunServers.join(",") : String(stunServers);
+    updateStmt.run("stun_servers", sanitizeText(stunStr, 1000));
+  }
+
+  res.json({ success: true, message: "تنظیمات سرور چابکان با موفقیت ذخیره شد." });
+});
+
 // Public endpoint for participants to check room info before joining
 app.get("/api/rooms/:id/info", (req, res) => {
   const roomId = req.params.id;
@@ -291,9 +331,13 @@ app.get("/api/recordings/:id/download", (req, res) => {
   downloadRecording(res, req.params.id);
 });
 
-// List all recordings
-app.get("/api/recordings", authenticateToken, (req, res) => {
-  const recordings = listAllRecordings();
+// List recordings (optionally filtered by ?sessionId=...)
+app.get("/api/recordings", (req, res) => {
+  const { sessionId } = req.query;
+  const allRecs = listAllRecordings();
+  const recordings = sessionId
+    ? allRecs.filter((r) => r.session_id === sessionId)
+    : allRecs;
   res.json({ recordings });
 });
 

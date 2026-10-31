@@ -18,6 +18,9 @@ import {
   ArrowRight,
   LogOut,
   AlertCircle,
+  Settings,
+  Sliders,
+  X,
 } from "lucide-react";
 import { TransportConfig, UserRole } from "../../types";
 
@@ -101,6 +104,60 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
   const [createdRoom, setCreatedRoom] = useState<{ id: string; title: string; inviteLink: string } | null>(null);
   const [activeAdminRooms, setActiveAdminRooms] = useState<ManagedRoomItem[]>([]);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // Chabokan Network Configuration state (Requirement 4)
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configHost, setConfigHost] = useState("");
+  const [configWsPort, setConfigWsPort] = useState(3000);
+  const [configUdpPort, setConfigUdpPort] = useState(3001);
+  const [configStun, setConfigStun] = useState("stun:stun.l.google.com:19302");
+  const [configNotice, setConfigNotice] = useState("");
+  const [configSaving, setConfigSaving] = useState(false);
+
+  const fetchServerConfig = () => {
+    fetch("/api/config")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.publicHost) setConfigHost(data.publicHost);
+        if (data.publicWsPort) setConfigWsPort(data.publicWsPort);
+        if (data.publicUdpPort) setConfigUdpPort(data.publicUdpPort);
+        if (data.stunServers) setConfigStun(data.stunServers.join(", "));
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchServerConfig();
+  }, []);
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setConfigSaving(true);
+    setConfigNotice("");
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          publicHost: configHost.trim(),
+          publicWsPort: configWsPort,
+          publicUdpPort: configUdpPort,
+          stunServers: configStun.split(",").map((s) => s.trim()).filter(Boolean),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "خطا در ذخیره کانفیگ");
+      setConfigNotice("تنظیمات با موفقیت ذخیره شد!");
+      setTimeout(() => setConfigNotice(""), 3000);
+    } catch (err: any) {
+      alert(err.message || "خطا در ذخیره تنظیمات");
+    } finally {
+      setConfigSaving(false);
+    }
+  };
 
   // Fetch room info when in participant mode
   useEffect(() => {
@@ -494,13 +551,27 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
                   <div className="text-[10px] text-adobe-muted">حساب کاربری ادمین فعال</div>
                 </div>
               </div>
-              <button
-                onClick={handleAdminLogout}
-                className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 transition"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>خروج</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchServerConfig();
+                    setShowConfigModal(true);
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-950/60 border border-blue-800 text-[11px] text-blue-300 hover:text-white hover:bg-blue-900/60 transition"
+                  title="تنظیم پورت‌های فورواردشده و دامنه چابکان"
+                >
+                  <Settings className="w-3.5 h-3.5 text-blue-400" />
+                  <span>تنظیمات شبکه چابکان</span>
+                </button>
+                <button
+                  onClick={handleAdminLogout}
+                  className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 transition"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>خروج</span>
+                </button>
+              </div>
             </div>
 
             {/* Create Room Box */}
@@ -727,6 +798,109 @@ export const EntryDialog: React.FC<EntryDialogProps> = ({ onJoin }) => {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Chabokan Network Configuration Modal (Requirement 4) */}
+        {showConfigModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50 select-none text-right" dir="rtl">
+            <div className="w-full max-w-md bg-adobe-pod border border-adobe-border rounded-2xl shadow-2xl p-5 flex flex-col gap-3.5 animate-fadeIn">
+              <div className="flex items-center justify-between border-b border-adobe-border pb-2">
+                <div className="flex items-center gap-2 font-bold text-white text-xs">
+                  <Sliders className="w-4 h-4 text-adobe-accent" />
+                  <span>تنظیمات شبکه و پورت‌های چابکان (Chabokan Port Forwarding)</span>
+                </div>
+                <button
+                  onClick={() => setShowConfigModal(false)}
+                  className="p-1 rounded text-adobe-muted hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {configNotice && (
+                <div className="p-2.5 bg-emerald-950/60 border border-emerald-700 rounded-lg text-emerald-300 text-[11px] font-bold">
+                  {configNotice}
+                </div>
+              )}
+
+              <form onSubmit={handleSaveConfig} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
+                    دامنه یا آدرس عمومی سرور (Public Host / Domain):
+                  </label>
+                  <input
+                    type="text"
+                    value={configHost}
+                    onChange={(e) => setConfigHost(e.target.value)}
+                    placeholder="مثال: classroom.chabokan.app یا خالی برای خودکار"
+                    className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
+                  />
+                  <p className="text-[10px] text-adobe-muted mt-0.5">در صورت خالی بودن، از آدرس جاری مرورگر استفاده می‌شود.</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
+                      پورت عمومی وب / WS:
+                    </label>
+                    <input
+                      type="number"
+                      value={configWsPort}
+                      onChange={(e) => setConfigWsPort(Number(e.target.value))}
+                      placeholder="3000"
+                      className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
+                      پورت عمومی فورواردشده UDP:
+                    </label>
+                    <input
+                      type="number"
+                      value={configUdpPort}
+                      onChange={(e) => setConfigUdpPort(Number(e.target.value))}
+                      placeholder="3001"
+                      className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-amber-300/80 bg-amber-950/40 p-2 rounded border border-amber-800/60 leading-relaxed">
+                  نکته چابکان: اگر در چابکان پورت UDP به پورت دیگری مپ شده است (مثلاً 3001 به 32145 فوروارد شده)، عدد پورت خارجی را در فیلد UDP وارد کنید.
+                </p>
+
+                <div>
+                  <label className="block text-adobe-muted font-semibold mb-1 text-[11px]">
+                    سرورهای STUN برای WebRTC (با کاما جدا کنید):
+                  </label>
+                  <input
+                    type="text"
+                    value={configStun}
+                    onChange={(e) => setConfigStun(e.target.value)}
+                    placeholder="stun:stun.l.google.com:19302"
+                    className="w-full bg-adobe-bar border border-adobe-border rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-adobe-accent"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-adobe-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowConfigModal(false)}
+                    className="px-3 py-1.5 rounded bg-adobe-bar text-adobe-muted hover:text-white"
+                  >
+                    بستن
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={configSaving}
+                    className="px-4 py-1.5 bg-adobe-accent hover:bg-blue-600 text-white font-bold rounded shadow transition"
+                  >
+                    {configSaving ? "در حال ذخیره..." : "ذخیره تنظیمات"}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

@@ -14,29 +14,55 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
     isScreenSharing,
     setMediaDevicesState,
     setLocalStream,
+    setLocalCamStream,
+    setLocalScreenStream,
     setLocalAudioStream,
+    setUserMediaState,
     currentUser,
     roomState,
   } = useRoomStore();
 
-  const syncPeers = useCallback(() => {
-    // Determine active video stream: screen share takes precedence over camera
-    const activeVideoStream = screenStreamRef.current || videoStreamRef.current || null;
-    const activeAudioStream = audioStreamRef.current || null;
+  const broadcastMediaState = useCallback(
+    (mic: boolean, cam: boolean, screen: boolean) => {
+      if (!currentUser) return;
+      const mediaState = { isMicOn: mic, isCamOn: cam, isScreenOn: screen };
+      setUserMediaState(currentUser.id, mediaState);
+      sendMessage({
+        type: "MEDIA_STATE",
+        userId: currentUser.id,
+        mediaState,
+      });
+      webrtc.sendRealtimeData({
+        type: "MEDIA_STATE",
+        userId: currentUser.id,
+        mediaState,
+      });
+    },
+    [currentUser, setUserMediaState, sendMessage]
+  );
 
-    setLocalStream(activeVideoStream);
-    setLocalAudioStream(activeAudioStream);
-    webrtc.setLocalStreams(activeVideoStream, activeAudioStream);
+  const syncPeers = useCallback(
+    (activeCam: MediaStream | null, activeScreen: MediaStream | null, activeAudio: MediaStream | null) => {
+      // Primary video stream for WebRTC transceiver: screen share if sharing, else webcam
+      const activeVideoStream = activeScreen || activeCam || null;
 
-    // If we have active streams, initiate connection to new peers in room
-    if ((activeVideoStream || activeAudioStream) && roomState) {
-      for (const peerId of Object.keys(roomState.users)) {
-        if (peerId !== currentUser?.id && !webrtc.hasPeer(peerId)) {
-          webrtc.connectToPeer(peerId);
+      setLocalStream(activeVideoStream);
+      setLocalCamStream(activeCam);
+      setLocalScreenStream(activeScreen);
+      setLocalAudioStream(activeAudio);
+      webrtc.setLocalStreams(activeVideoStream, activeAudio);
+
+      // If we have active streams, initiate connection to new peers in room
+      if ((activeVideoStream || activeAudio) && roomState) {
+        for (const peerId of Object.keys(roomState.users)) {
+          if (peerId !== currentUser?.id && !webrtc.hasPeer(peerId)) {
+            webrtc.connectToPeer(peerId);
+          }
         }
       }
-    }
-  }, [currentUser, roomState, setLocalStream, setLocalAudioStream]);
+    },
+    [currentUser, roomState, setLocalStream, setLocalCamStream, setLocalScreenStream, setLocalAudioStream]
+  );
 
   // Toggle Microphone
   const toggleMic = useCallback(async () => {
@@ -46,7 +72,8 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
         audioStreamRef.current = null;
       }
       setMediaDevicesState(false, isCamOn, isScreenSharing);
-      syncPeers();
+      broadcastMediaState(false, isCamOn, isScreenSharing);
+      syncPeers(videoStreamRef.current, screenStreamRef.current, null);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -60,15 +87,16 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
         });
         audioStreamRef.current = stream;
         setMediaDevicesState(true, isCamOn, isScreenSharing);
-        syncPeers();
+        broadcastMediaState(true, isCamOn, isScreenSharing);
+        syncPeers(videoStreamRef.current, screenStreamRef.current, stream);
       } catch (err) {
         console.error("Microphone access denied or error:", err);
-        alert("Could not access microphone.");
+        alert("امکان دسترسی به میکروفون میسر نشد.");
       }
     }
-  }, [isMicOn, isCamOn, isScreenSharing, setMediaDevicesState, syncPeers]);
+  }, [isMicOn, isCamOn, isScreenSharing, setMediaDevicesState, broadcastMediaState, syncPeers]);
 
-  // Toggle Webcam
+  // Toggle Webcam (Does not affect or trigger Screen Share)
   const toggleCam = useCallback(async () => {
     if (isCamOn) {
       if (videoStreamRef.current) {
@@ -76,7 +104,8 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
         videoStreamRef.current = null;
       }
       setMediaDevicesState(isMicOn, false, isScreenSharing);
-      syncPeers();
+      broadcastMediaState(isMicOn, false, isScreenSharing);
+      syncPeers(null, screenStreamRef.current, audioStreamRef.current);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -88,16 +117,16 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
         });
         videoStreamRef.current = stream;
         setMediaDevicesState(isMicOn, true, isScreenSharing);
-        sendMessage({ type: "SET_SHARE_MODE", mode: "camera" });
-        syncPeers();
+        broadcastMediaState(isMicOn, true, isScreenSharing);
+        syncPeers(stream, screenStreamRef.current, audioStreamRef.current);
       } catch (err) {
         console.error("Webcam access error:", err);
-        alert("Could not access camera.");
+        alert("امکان دسترسی به وبکم میسر نشد.");
       }
     }
-  }, [isMicOn, isCamOn, isScreenSharing, setMediaDevicesState, sendMessage, syncPeers]);
+  }, [isMicOn, isCamOn, isScreenSharing, setMediaDevicesState, broadcastMediaState, syncPeers]);
 
-  // Toggle Screen Share
+  // Toggle Screen Share (Separated from Camera)
   const toggleScreen = useCallback(async () => {
     if (isScreenSharing) {
       if (screenStreamRef.current) {
@@ -105,7 +134,8 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
         screenStreamRef.current = null;
       }
       setMediaDevicesState(isMicOn, isCamOn, false);
-      syncPeers();
+      broadcastMediaState(isMicOn, isCamOn, false);
+      syncPeers(videoStreamRef.current, null, audioStreamRef.current);
     } else {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -118,19 +148,21 @@ export function useMediaBroadcast(sendMessage: (msg: WSMessage) => void) {
         screenStreamRef.current = stream;
         setMediaDevicesState(isMicOn, isCamOn, true);
         sendMessage({ type: "SET_SHARE_MODE", mode: "screen" });
-        syncPeers();
+        broadcastMediaState(isMicOn, isCamOn, true);
+        syncPeers(videoStreamRef.current, stream, audioStreamRef.current);
 
         // Handle user stopping screen share from browser banner
         stream.getVideoTracks()[0].onended = () => {
           screenStreamRef.current = null;
           setMediaDevicesState(isMicOn, isCamOn, false);
-          syncPeers();
+          broadcastMediaState(isMicOn, isCamOn, false);
+          syncPeers(videoStreamRef.current, null, audioStreamRef.current);
         };
       } catch (err) {
         console.error("Screen share error:", err);
       }
     }
-  }, [isScreenSharing, isMicOn, isCamOn, setMediaDevicesState, sendMessage, syncPeers]);
+  }, [isScreenSharing, isMicOn, isCamOn, setMediaDevicesState, sendMessage, broadcastMediaState, syncPeers]);
 
   return {
     toggleMic,

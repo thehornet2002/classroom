@@ -20,12 +20,19 @@ export interface UserPermissions {
   canShareDoc: boolean;
 }
 
+export interface UserMediaState {
+  isMicOn: boolean;
+  isCamOn: boolean;
+  isScreenOn: boolean;
+}
+
 export interface User {
   id: string;
   name: string;
   role: UserRole;
   status: UserStatus;
   permissions: UserPermissions;
+  mediaState?: UserMediaState;
   joinedAt: number;
   admitted: boolean;
 }
@@ -65,18 +72,26 @@ export interface WhiteboardStroke {
   text?: string;
 }
 
+export interface VoterInfo {
+  userId: string;
+  userName: string;
+  timestamp: number;
+}
+
 export interface PollOption {
   id: string;
   text: string;
   votes: string[]; // user IDs
+  voterDetails?: VoterInfo[];
 }
 
 export interface Poll {
   id: string;
   question: string;
-  type: "single" | "multiple" | "text";
+  type: "single" | "multiple" | "text" | "attendance";
+  isAnonymous?: boolean;
   options: PollOption[];
-  textAnswers?: { userId: string; userName: string; answer: string }[];
+  textAnswers?: { userId: string; userName: string; answer: string; timestamp?: number }[];
   isOpen: boolean;
   broadcastResults: boolean;
   createdAt: number;
@@ -158,6 +173,13 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface ServerConfig {
+  publicHost: string;
+  publicWsPort: number;
+  publicUdpPort: number;
+  stunServers: string[];
+}
+
 export type WSMessage =
   | { type: "JOIN"; roomId: string; userId: string; name: string; role: UserRole; pass?: string }
   | { type: "AUTH_ERROR"; message: string }
@@ -169,6 +191,7 @@ export type WSMessage =
   | { type: "USER_JOINED"; user: User }
   | { type: "USER_LEFT"; userId: string }
   | { type: "USER_UPDATED"; user: User }
+  | { type: "MEDIA_STATE"; userId: string; mediaState: UserMediaState }
   | { type: "KICK_USER"; targetId: string; reason?: string }
   | { type: "STATUS_CHANGE"; status: UserStatus; targetId?: string }
   | { type: "SET_ROLE"; targetId: string; role: UserRole }
@@ -194,6 +217,10 @@ export type WSMessage =
   | { type: "BREAKOUT_START"; rooms: BreakoutRoom[]; durationMinutes?: number }
   | { type: "BREAKOUT_BROADCAST"; text: string }
   | { type: "BREAKOUT_END" }
+  | { type: "CLOSE_ROOM"; reason?: string }
+  | { type: "ROOM_ENDED"; reason?: string }
+  | { type: "RECORDING_STATE"; isRecording: boolean; durationSeconds?: number }
+  | { type: "RECORDING_FINISHED"; recordingId: string; title: string; downloadUrl: string }
   | { type: "SIGNAL_OFFER"; targetId: string; senderId: string; sdp: RTCSessionDescriptionInit }
   | { type: "SIGNAL_ANSWER"; targetId: string; senderId: string; sdp: RTCSessionDescriptionInit }
   | { type: "SIGNAL_ICE"; targetId: string; senderId: string; candidate: RTCIceCandidateInit }

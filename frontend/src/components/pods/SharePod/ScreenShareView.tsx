@@ -7,7 +7,7 @@ interface ScreenShareViewProps {
 }
 
 export const ScreenShareView: React.FC<ScreenShareViewProps> = ({ onToggleScreen }) => {
-  const { localStream, remoteStreams, isScreenSharing, currentUser } = useRoomStore();
+  const { localScreenStream, remoteStreams, isScreenSharing, userMediaStates, currentUser, roomState } = useRoomStore();
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const canShare =
@@ -15,18 +15,19 @@ export const ScreenShareView: React.FC<ScreenShareViewProps> = ({ onToggleScreen
     currentUser?.role === "presenter" ||
     currentUser?.permissions.canScreen;
 
-  // Find active stream: either our local screen or the first remote stream that has video tracks
+  // Find active screen stream: either our local screen or remote stream with isScreenOn
   let activeStream: MediaStream | null = null;
   let activeSpeakerName = "";
 
-  if (isScreenSharing && localStream) {
-    activeStream = localStream;
-    activeSpeakerName = `${currentUser?.name} (You)`;
+  if (isScreenSharing && localScreenStream) {
+    activeStream = localScreenStream;
+    activeSpeakerName = `${currentUser?.name} (شما)`;
   } else {
     for (const [peerId, stream] of Object.entries(remoteStreams)) {
-      if (stream.getVideoTracks().length > 0) {
+      const isPeerScreen = userMediaStates[peerId]?.isScreenOn;
+      if (isPeerScreen && stream.getVideoTracks().length > 0) {
         activeStream = stream;
-        activeSpeakerName = useRoomStore.getState().roomState?.users[peerId]?.name || "Presenter";
+        activeSpeakerName = roomState?.users[peerId]?.name || "ارائه‌دهنده";
         break;
       }
     }
@@ -40,13 +41,13 @@ export const ScreenShareView: React.FC<ScreenShareViewProps> = ({ onToggleScreen
 
   if (!activeStream) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950 p-6 text-center text-adobe-muted select-none">
+      <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950 p-6 text-center text-adobe-muted select-none" dir="rtl">
         <Monitor className="w-12 h-12 mb-3 text-adobe-border opacity-70" />
         <h3 className="text-sm font-semibold text-adobe-text mb-1">
-          Nothing is currently being shared
+          در حال حاضر صفحه‌ای به اشتراک گذاشته نشده است
         </h3>
         <p className="text-xs max-w-sm mb-4">
-          Hosts and presenters can share their full screen, application windows, or browser tabs with participants.
+          استاد یا ارائه‌دهنده می‌توانند صفحه نمایش، تب‌های مرورگر یا برنامه‌های دسکتاپ خود را به اشتراک بگذارند.
         </p>
 
         {canShare ? (
@@ -55,11 +56,11 @@ export const ScreenShareView: React.FC<ScreenShareViewProps> = ({ onToggleScreen
             className="px-4 py-2 rounded-md bg-adobe-accent hover:bg-blue-600 text-white text-xs font-semibold shadow-md transition flex items-center gap-2"
           >
             <Monitor className="w-4 h-4" />
-            <span>Share My Screen</span>
+            <span>اشتراک‌گذاری صفحه نمایش</span>
           </button>
         ) : (
           <span className="text-[11px] text-adobe-muted italic">
-            Waiting for a presenter to start sharing...
+            در انتظار اشتراک‌گذاری صفحه توسط ارائه‌دهنده...
           </span>
         )}
       </div>
@@ -72,28 +73,27 @@ export const ScreenShareView: React.FC<ScreenShareViewProps> = ({ onToggleScreen
         ref={videoRef}
         autoPlay
         playsInline
-        muted={isScreenSharing} // Mute local preview to avoid feedback loop
+        muted={isScreenSharing}
         className="w-full h-full object-contain"
       />
 
-      {/* Floating Info Overlay */}
-      <div className="absolute top-2 left-2 bg-adobe-bar/80 backdrop-blur border border-adobe-border px-2.5 py-1 rounded text-xs text-white flex items-center gap-2">
-        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-        <span className="font-semibold">{activeSpeakerName}'s Screen</span>
-      </div>
+      {/* Floating Toolbar on Hover */}
+      <div className="absolute top-3 left-3 bg-black/75 backdrop-blur border border-adobe-border/60 px-3 py-1.5 rounded-lg flex items-center gap-3 text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1.5 font-medium">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>اشتراک صفحه: {activeSpeakerName}</span>
+        </div>
 
-      {isScreenSharing && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-adobe-bar/90 backdrop-blur border border-rose-800 px-3 py-1.5 rounded-full flex items-center gap-2 shadow-2xl">
-          <span className="text-xs text-rose-300 font-medium">Sharing active</span>
+        {isScreenSharing && (
           <button
             onClick={onToggleScreen}
-            className="flex items-center gap-1 bg-rose-600 hover:bg-rose-500 text-white text-xs px-2.5 py-0.5 rounded-full font-semibold transition"
+            className="flex items-center gap-1 bg-rose-600/80 hover:bg-rose-600 px-2 py-0.5 rounded text-[11px] font-semibold transition"
           >
             <StopCircle className="w-3.5 h-3.5" />
-            <span>Stop Sharing</span>
+            <span>توقف اشتراک</span>
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

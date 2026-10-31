@@ -441,13 +441,23 @@ class Room {
           poll.textAnswers.push({
             userId: senderId,
             userName: sender.user.name,
-            answer: msg.textAnswer,
+            answer: sanitizeText(msg.textAnswer, 1000),
+            timestamp: Date.now(),
           });
         } else if (msg.optionIds) {
           for (const opt of poll.options) {
             opt.votes = opt.votes.filter((u) => u !== senderId);
+            if (opt.voterDetails) {
+              opt.voterDetails = opt.voterDetails.filter((v) => v.userId !== senderId);
+            }
             if (msg.optionIds.includes(opt.id)) {
               opt.votes.push(senderId);
+              if (!opt.voterDetails) opt.voterDetails = [];
+              opt.voterDetails.push({
+                userId: senderId,
+                userName: sender.user.name,
+                timestamp: Date.now(),
+              });
             }
           }
         }
@@ -505,6 +515,45 @@ class Room {
         this.breakoutsActive = false;
         this.breakoutRooms = [];
         this.broadcast(msg);
+        break;
+      }
+
+      case "MEDIA_STATE": {
+        if (this.users[senderId]) {
+          this.users[senderId].mediaState = msg.mediaState;
+        }
+        this.broadcast(msg, senderId);
+        break;
+      }
+
+      case "RECORDING_STATE": {
+        if (sender.user.role !== "host") return;
+        this.broadcast(msg);
+        break;
+      }
+
+      case "RECORDING_FINISHED": {
+        if (sender.user.role !== "host") return;
+        this.broadcast(msg);
+        break;
+      }
+
+      case "CLOSE_ROOM": {
+        if (sender.user.role !== "host") return;
+        this.broadcast({
+          type: "ROOM_ENDED",
+          reason: msg.reason || "کلاس توسط مدیر خاتمه یافت و اتاق بسته شد.",
+        });
+        for (const peer of this.peers.values()) {
+          try {
+            peer.ws.close(4003, "Room ended by host");
+          } catch (e) {}
+        }
+        rooms.delete(this.roomId);
+        try {
+          const { db } = require("./db");
+          db.prepare("UPDATE managed_rooms SET status = 'ended' WHERE id = ?").run(this.roomId);
+        } catch (e) {}
         break;
       }
 

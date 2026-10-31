@@ -1,18 +1,28 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRoomStore } from "../stores/roomStore";
+import { WSMessage } from "../types";
 
-export function useMeetingRecorder() {
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
+export function useMeetingRecorder(sendMessage?: (msg: WSMessage) => void) {
+  const [isUploading, setIsUploading] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+  const durationRef = useRef<number>(0);
 
-  const { localAudioStream } = useRoomStore();
+  const {
+    localAudioStream,
+    roomState,
+    currentUser,
+    isRecording,
+    recordingSeconds,
+    setIsRecording,
+    setRecordingSeconds,
+    addCompletedRecording,
+  } = useRoomStore();
 
   const startRecording = useCallback(async () => {
     try {
-      // 1. Capture screen with system audio
+      // 1. Capture screen with audio
       const displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: "browser",
@@ -20,7 +30,7 @@ export function useMeetingRecorder() {
         audio: true,
       });
 
-      // 2. Mix screen audio + local mic if active
+      // 2. Mix screen audio + local microphone if active
       const audioTracks: MediaStreamTrack[] = [];
       displayStream.getAudioTracks().forEach((t) => audioTracks.push(t));
 
@@ -28,7 +38,6 @@ export function useMeetingRecorder() {
         localAudioStream.getAudioTracks().forEach((t) => audioTracks.push(t));
       }
 
-      // If multiple audio tracks exist, mix them using AudioContext
       let finalStream: MediaStream;
       if (audioTracks.length > 1) {
         const audioCtx = new AudioContext();
@@ -61,10 +70,12 @@ export function useMeetingRecorder() {
         }
       };
 
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         if (timerRef.current) clearInterval(timerRef.current);
-        setRecordingSeconds(0);
+        const finalDuration = durationRef.current;
         setIsRecording(false);
+        setRecordingSeconds(0);
+        sendMessage?.({ type: "RECORDING_STATE", isRecording: false });
 
         // Stop all tracks on display stream
         displayStream.getTracks().forEach((t) => t.stop());
@@ -72,49 +83,64 @@ export function useMeetingRecorder() {
         if (recordedChunksRef.current.length === 0) return;
 
         const blob = new Blob(recordedChunksRef.current, { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-        a.href = url;
-        a.download = `Classroom-Recording-${dateStr}.webm`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        setIsUploading(true);
 
-        // Upload to server disk if running on Server edition
         try {
-          const wsUrl = localStorage.getItem("classroom_ws_url");
-          let httpTarget = window.location.origin;
-          if (wsUrl) {
-            httpTarget = wsUrl.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/ws.*$/i, "");
-          }
-          fetch(`${httpTarget}/api/recordings`, {
+          const res = await fetch("/api/recordings/upload", {
             method: "POST",
+            headers: {
+              "x-session-id": roomState?.roomId || "main",
+              "x-title": encodeURIComponent(roomState?.roomName || "کلاس آنلاین"),
+              "x-teacher": encodeURIComponent(currentUser?.name || "استاد"),
+              "x-duration": String(finalDuration),
+            },
             body: blob,
-          }).catch(() => {});
-        } catch (e) {}
+          });
+
+          const data = await res.json();
+          if (data.recordingId && data.downloadUrl) {
+            const finishedRec = {
+              id: data.recordingId,
+              title: roomState?.roomName || "کلاس آنلاین",
+              downloadUrl: data.downloadUrl,
+              createdAt: Date.now(),
+            };
+            addCompletedRecording(finishedRec);
+            sendMessage?.({
+              type: "RECORDING_FINISHED",
+              recordingId: data.recordingId,
+              title: finishedRec.title,
+              downloadUrl: data.downloadUrl,
+            });
+          }
+        } catch (err) {
+          console.error("Failed to upload recording to server:", err);
+        } finally {
+          setIsUploading(false);
+        }
       };
 
-      // Also handle user stopping sharing via browser stop button
       displayStream.getVideoTracks()[0].onended = () => {
         if (recorder.state !== "inactive") {
           recorder.stop();
         }
       };
 
-      recorder.start(1000); // 1s slice chunks
+      recorder.start(1000); // 1s slice
       setIsRecording(true);
       setRecordingSeconds(0);
+      durationRef.current = 0;
+      sendMessage?.({ type: "RECORDING_STATE", isRecording: true });
 
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = window.setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
+        durationRef.current += 1;
+        setRecordingSeconds(durationRef.current);
       }, 1000);
     } catch (err) {
       console.error("Recording error or canceled:", err);
     }
-  }, [localAudioStream]);
+  }, [localAudioStream, roomState, currentUser, setIsRecording, setRecordingSeconds, addCompletedRecording, sendMessage]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -128,18 +154,9 @@ export function useMeetingRecorder() {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
-    };
-  }, []);
-
   return {
     isRecording,
-    recordingSeconds,
+    isUploading,
     recordingTimeStr: formatTime(recordingSeconds),
     startRecording,
     stopRecording,

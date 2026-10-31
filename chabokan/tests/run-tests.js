@@ -277,6 +277,73 @@ async function runAllTests() {
     studentWs.close();
   });
 
+  // 9. Chabokan Server Config API Endpoint
+  await asyncTest("GET and POST /api/config for Chabokan port mapping", async () => {
+    const addr = server.address();
+    const port = typeof addr === "object" ? addr.port : 3000;
+    const adminToken = generateToken({ id: "u_admin", username: "admin", name: "مدیر", role: "admin" });
+
+    // Update config with custom forwarded UDP port
+    const postData = JSON.stringify({
+      publicHost: "test.chabokan.app",
+      publicWsPort: 3000,
+      publicUdpPort: 32145,
+    });
+
+    const updateRes = await new Promise((resolve, reject) => {
+      const req = http.request(
+        `http://localhost:${port}/api/config`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(postData),
+            Authorization: `Bearer ${adminToken}`,
+          },
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => resolve(JSON.parse(body)));
+          res.on("error", reject);
+        }
+      );
+      req.write(postData);
+      req.end();
+    });
+    assert.strictEqual(updateRes.success, true);
+
+    // Verify GET /api/config returns the saved ports
+    const configData = await new Promise((resolve, reject) => {
+      http.get(`http://localhost:${port}/api/config`, (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve(JSON.parse(body)));
+        res.on("error", reject);
+      });
+    });
+
+    assert.strictEqual(configData.publicUdpPort, 32145);
+    assert.strictEqual(configData.publicHost, "test.chabokan.app");
+  });
+
+  // 10. Recordings API Endpoint
+  await asyncTest("GET /api/recordings lists recordings with download URLs", async () => {
+    const addr = server.address();
+    const port = typeof addr === "object" ? addr.port : 3000;
+
+    const recData = await new Promise((resolve, reject) => {
+      http.get(`http://localhost:${port}/api/recordings`, (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve(JSON.parse(body)));
+        res.on("error", reject);
+      });
+    });
+
+    assert.ok(Array.isArray(recData.recordings), "Expected array of recordings");
+  });
+
   console.log("\n=========================================");
   console.log(`📊 Test Results: ${passed} Passed, ${failed} Failed`);
   console.log("=========================================");

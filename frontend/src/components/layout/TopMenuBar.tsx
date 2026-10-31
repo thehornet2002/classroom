@@ -25,6 +25,9 @@ import {
   Zap,
   Activity,
   Sliders,
+  Download,
+  Film,
+  PowerOff,
 } from "lucide-react";
 import { useRoomStore } from "../../stores/roomStore";
 import { TransportConfig, UserStatus, WSMessage } from "../../types";
@@ -61,10 +64,39 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [meetingMenuOpen, setMeetingMenuOpen] = useState(false);
   const [transportMenuOpen, setTransportMenuOpen] = useState(false);
-  const { isRecording, recordingTimeStr, startRecording, stopRecording } = useMeetingRecorder();
+  const [recordingsModalOpen, setRecordingsModalOpen] = useState(false);
+  const [recordingsList, setRecordingsList] = useState<any[]>([]);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
+
+  const { isRecording, isUploading, recordingTimeStr, startRecording, stopRecording } = useMeetingRecorder(sendMessage);
 
   const transport = useRoomStore((s) => s.transport);
   const setTransport = useRoomStore((s) => s.setTransport);
+  const completedRecordings = useRoomStore((s) => s.completedRecordings);
+
+  const fetchRecordings = () => {
+    setRecordingsLoading(true);
+    fetch(`/api/recordings?sessionId=${encodeURIComponent(roomState?.roomId || "")}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setRecordingsList(data.recordings || []);
+        setRecordingsLoading(false);
+      })
+      .catch(() => setRecordingsLoading(false));
+  };
+
+  const handleEndRoom = async () => {
+    if (confirm("آیا مطمئن هستید که می‌خواهید کلاس را برای همه شرکت‌کنندگان ببندید و اتاق را پایان دهید؟")) {
+      sendMessage({ type: "CLOSE_ROOM", reason: "کلاس توسط مدیر به پایان رسید." });
+      if (roomState?.roomId) {
+        fetch(`/api/rooms/${encodeURIComponent(roomState.roomId)}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${localStorage.getItem("classroom_admin_token") || ""}` },
+        }).catch(() => {});
+      }
+      window.location.href = window.location.pathname;
+    }
+  };
 
   const handleUpdateTransport = (key: keyof TransportConfig, val: "udp" | "ws") => {
     if (!isHost) return;
@@ -138,19 +170,44 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
                       setMeetingMenuOpen(false);
                       onOpenBreakouts();
                     }}
-                    className="w-full text-left px-3 py-1.5 hover:bg-adobe-border flex items-center gap-2"
+                    className="w-full text-right px-3 py-1.5 hover:bg-adobe-border flex items-center gap-2"
                   >
                     <Layers className="w-3.5 h-3.5" />
-                    <span>Breakout Rooms</span>
+                    <span>اتاق‌های تفکیک‌شده (Breakout)</span>
                   </button>
                 </>
               )}
+
+              <button
+                onClick={() => {
+                  setMeetingMenuOpen(false);
+                  fetchRecordings();
+                  setRecordingsModalOpen(true);
+                }}
+                className="w-full text-right px-3 py-1.5 hover:bg-adobe-border flex items-center gap-2 text-blue-300"
+              >
+                <Film className="w-3.5 h-3.5 text-blue-400" />
+                <span>ویدیوهای ضبط‌شده (Recordings)</span>
+              </button>
+
+              <div className="border-t border-adobe-border my-1" />
+
+              {isHost && (
+                <button
+                  onClick={handleEndRoom}
+                  className="w-full text-right px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 flex items-center gap-2 font-bold"
+                >
+                  <PowerOff className="w-3.5 h-3.5 text-rose-400" />
+                  <span>بستن و اتمام کلاس (End Room)</span>
+                </button>
+              )}
+
               <button
                 onClick={() => window.location.reload()}
-                className="w-full text-left px-3 py-1.5 hover:bg-rose-950 text-rose-300 flex items-center gap-2"
+                className="w-full text-right px-3 py-1.5 hover:bg-adobe-border text-adobe-muted flex items-center gap-2"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>Leave Meeting</span>
+                <span>خروج از جلسه</span>
               </button>
             </div>
           )}
@@ -460,6 +517,97 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
           )}
         </div>
       </div>
+
+      {/* Recordings Modal (Requirement 5 & 7) */}
+      {recordingsModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50 text-right select-none" dir="rtl">
+          <div className="w-full max-w-md bg-adobe-pod border border-adobe-border rounded-xl shadow-2xl p-4 flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between border-b border-adobe-border pb-2 mb-3">
+              <div className="flex items-center gap-1.5 font-bold text-white text-xs">
+                <Film className="w-4 h-4 text-adobe-accent" />
+                <span>ویدیوهای ضبط‌شده کلاس (Recordings)</span>
+              </div>
+              <button
+                onClick={() => setRecordingsModalOpen(false)}
+                className="p-1 rounded text-adobe-muted hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {recordingsLoading ? (
+                <div className="p-4 text-center text-adobe-muted text-xs">در حال بارگذاری لیست ویدیوها...</div>
+              ) : recordingsList.length === 0 && completedRecordings.length === 0 ? (
+                <div className="p-6 text-center text-adobe-muted text-xs space-y-1">
+                  <Film className="w-8 h-8 mx-auto opacity-30 mb-2" />
+                  <p>هنوز ویدیویی برای این جلسه ضبط نشده است.</p>
+                  <p className="text-[10px]">استاد با زدن دکمه Record می‌تواند جلسه را ضبط نماید.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Newly completed recordings in current turn */}
+                  {completedRecordings.map((rec) => (
+                    <div
+                      key={rec.id}
+                      className="p-2.5 bg-emerald-950/40 border border-emerald-800/80 rounded-lg flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="font-bold text-emerald-200 text-xs">{rec.title}</div>
+                        <div className="text-[10px] text-emerald-400 mt-0.5">همین الان ذخیره شد</div>
+                      </div>
+                      <a
+                        href={rec.downloadUrl}
+                        download
+                        className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[11px] font-bold shadow"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>دانلود ویدیو</span>
+                      </a>
+                    </div>
+                  ))}
+
+                  {/* Past recordings fetched from server */}
+                  {recordingsList.map((rec) => (
+                    <div
+                      key={rec.id}
+                      className="p-2.5 bg-adobe-bar/60 border border-adobe-border rounded-lg flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="font-bold text-white text-xs">{rec.title}</div>
+                        <div className="text-[10px] text-adobe-muted flex items-center gap-2 mt-0.5">
+                          <span>استاد: {rec.teacher_name}</span>
+                          <span>•</span>
+                          <span>{(rec.filesize / (1024 * 1024)).toFixed(1)} MB</span>
+                          <span>•</span>
+                          <span>{new Date(rec.created_at).toLocaleDateString("fa-IR")}</span>
+                        </div>
+                      </div>
+                      <a
+                        href={`/api/recordings/${rec.id}/download`}
+                        download
+                        className="flex items-center gap-1 px-2.5 py-1 bg-adobe-accent hover:bg-blue-600 text-white rounded text-[11px] font-semibold shadow"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>دانلود</span>
+                      </a>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-adobe-border mt-3 text-center">
+              <button
+                onClick={() => setRecordingsModalOpen(false)}
+                className="w-full py-1.5 bg-adobe-bar hover:bg-adobe-border text-adobe-muted hover:text-white rounded text-xs"
+              >
+                بستن
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

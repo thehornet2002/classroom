@@ -289,9 +289,17 @@ app.post("/api/config", authenticateToken, requireRole("admin"), (req, res) => {
 // Test network & port connectivity for Chabokan configuration
 app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req, res) => {
   const { publicHost, publicWsPort, publicUdpPort } = req.body;
-  const targetHost = (publicHost && publicHost.trim()) || req.hostname || "127.0.0.1";
-  const wsPort = parseInt(publicWsPort, 10) || 3000;
-  const udpPort = parseInt(publicUdpPort, 10) || 3001;
+  const targetHost = (publicHost && publicHost.trim()) || "";
+  const wsPort = parseInt(publicWsPort, 10);
+  const udpPort = parseInt(publicUdpPort, 10);
+
+  if (!targetHost) {
+    return res.status(400).json({ error: "لطفاً ابتدا دامنه یا آدرس سرور چابکان را وارد کنید." });
+  }
+
+  if (isNaN(wsPort) || wsPort < 1 || wsPort > 65535) {
+    return res.status(400).json({ error: "شماره پورت وب نامعتبر است." });
+  }
 
   const results = {
     targetHost,
@@ -305,12 +313,12 @@ app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req
 
   const startTime = Date.now();
 
-  // 1. Test TCP/HTTP connectivity to the specified wsPort
+  // 1. Strictly test TCP socket connectivity to targetHost:wsPort (No fallback to 127.0.0.1!)
   try {
     const net = require("net");
     await new Promise((resolve, reject) => {
       const sock = new net.Socket();
-      sock.setTimeout(2500);
+      sock.setTimeout(3000);
       sock.on("connect", () => {
         sock.destroy();
         results.httpReachable = true;
@@ -318,58 +326,59 @@ app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req
       });
       sock.on("timeout", () => {
         sock.destroy();
-        reject(new Error("مهلت اتصال به پورت وب " + wsPort + " پایان یافت"));
+        reject(new Error(`مهلت اتصال به ${targetHost}:${wsPort} پایان یافت (Timeout)`));
       });
       sock.on("error", (err) => {
         sock.destroy();
-        reject(err);
+        reject(new Error(`اتصال به ${targetHost}:${wsPort} ناموفق بود: ${err.message}`));
       });
-      sock.connect(wsPort, targetHost === "localhost" ? "127.0.0.1" : targetHost);
+      sock.connect(wsPort, targetHost);
     });
   } catch (err) {
     results.httpError = err.message;
   }
 
-  // 2. Test UDP connectivity to the specified udpPort
-  try {
-    const client = dgram.createSocket("udp4");
-    const pingMsg = Buffer.from(JSON.stringify({ type: "PING", test: true }));
+  // 2. Strictly test UDP reachability with timeout
+  if (!isNaN(udpPort) && udpPort > 0 && udpPort <= 65535) {
+    try {
+      const client = dgram.createSocket("udp4");
+      const pingMsg = Buffer.from(JSON.stringify({ type: "PING", test: true }));
 
-    await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        client.close();
-        results.udpReachable = false;
-        results.udpError = `عدم دریافت پاسخ از پورت UDP ${udpPort}`;
-        resolve();
-      }, 1200);
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          client.close();
+          results.udpReachable = false;
+          results.udpError = `پاسخی از پورت UDP ${udpPort} روی ${targetHost} دریافت نشد`;
+          resolve();
+        }, 1500);
 
-      client.on("message", (msg) => {
-        try {
-          const resObj = JSON.parse(msg.toString());
-          if (resObj && resObj.type === "PONG") {
+        client.on("message", (msg) => {
+          try {
+            const resObj = JSON.parse(msg.toString());
+            if (resObj && resObj.type === "PONG") {
+              clearTimeout(timer);
+              results.udpReachable = true;
+              client.close();
+              resolve();
+            }
+          } catch (e) {}
+        });
+
+        client.send(pingMsg, udpPort, targetHost, (err) => {
+          if (err) {
             clearTimeout(timer);
-            results.udpReachable = true;
+            results.udpError = err.message;
             client.close();
             resolve();
           }
-        } catch (e) {}
+        });
       });
-
-      client.send(pingMsg, udpPort, targetHost === "localhost" ? "127.0.0.1" : targetHost, (err) => {
-        if (err) {
-          clearTimeout(timer);
-          results.udpError = err.message;
-          client.close();
-          resolve();
-        }
-      });
-    });
-  } catch (err) {
-    results.udpError = err.message;
+    } catch (err) {
+      results.udpError = err.message;
+    }
   }
 
   results.latencyMs = Date.now() - startTime;
-  // A test is ONLY successful if the HTTP/WS port is actually reachable!
   results.success = results.httpReachable;
 
   res.json(results);

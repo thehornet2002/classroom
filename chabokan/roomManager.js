@@ -149,12 +149,13 @@ class Room {
     if (oldPeer && oldPeer.ws !== ws) {
       try {
         oldPeer.ws.onclose = null;
+        oldPeer.ws.onerror = null;
         oldPeer.ws.close(4005, "Reconnected with new connection");
       } catch (e) {}
       this.peers.delete(userId);
     }
 
-    // Check if user was already admitted previously or has valid token
+    // Check if user was already admitted previously, in database, or has valid token
     const wasAlreadyAdmitted = (this.users[userId] && this.users[userId].admitted) || this.isTokenAdmitted(admitToken);
     const wasAlreadyWaiting = this.users[userId] && !this.users[userId].admitted;
 
@@ -165,7 +166,7 @@ class Room {
       role: finalRole,
       status: "none",
       permissions: getDefaultPermissions(finalRole),
-      joinedAt: Date.now(),
+      joinedAt: (this.users[userId] && this.users[userId].joinedAt) || Date.now(),
       admitted: isHost || wasAlreadyAdmitted,
     };
 
@@ -177,7 +178,7 @@ class Room {
         type: "ADMISSION_REQUIRED",
         message: "شما در صف انتظار هستید. لطفاً منتظر بمانید تا مدیر کلاس ورود شما را تایید کند.",
       });
-      // Only broadcast to host if not already in waiting list to prevent duplicate notifications
+      // ONLY broadcast to host if this user was NOT already waiting or already visible!
       if (!wasAlreadyWaiting) {
         this.broadcastToRoles(["host"], { type: "USER_JOINED", user });
       }
@@ -208,13 +209,13 @@ class Room {
       const cur = this.peers.get(userId);
       if (cur && cur.ws === ws) {
         this.peers.delete(userId);
-        // Retain user record for a 15-second grace period so momentary drops don't lose admission
+        // Retain user record for a 60-second grace period so momentary drops don't lose admission or duplicate in waiting room
         setTimeout(() => {
           if (!this.peers.has(userId)) {
             delete this.users[userId];
             this.broadcast({ type: "USER_LEFT", userId });
           }
-        }, 15000);
+        }, 60000);
       }
     };
 

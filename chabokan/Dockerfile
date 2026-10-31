@@ -1,15 +1,16 @@
-# Single standalone Dockerfile for Chabokan Node.js backend
 FROM node:20-alpine
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV UDP_PORT=3001
 
-COPY package.json ./
+COPY package*.json ./
 RUN npm install --omit=dev
 
-COPY server.js ./
+COPY . ./
 
 EXPOSE 3000
+EXPOSE 3001/udp
 
 CMD ["node", "server.js"]

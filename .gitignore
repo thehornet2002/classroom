@@ -3,18 +3,19 @@ node_modules/
 .pnp
 .pnp.js
 
-# Build Outputs
+# Production builds
 dist/
 build/
 out/
-public/
 frontend/dist/
 chabokan/public/
 
-# Tauri & Rust Builds
+# Tauri & Rust builds
+target/
 src-tauri/target/
 frontend/src-tauri/target/
-target/
+src-tauri/gen/
+frontend/src-tauri/gen/
 *.pdb
 
 # Local Database & Recordings (Chabokan persistent storage)
@@ -40,14 +41,15 @@ chabokan/recordings/
 *.key
 
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Editor & OS files
+# AI Agent & Workspace IDE State
+.kilo/
 .vscode/
 .idea/
 *.suo

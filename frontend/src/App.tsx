@@ -61,7 +61,10 @@ export function App() {
     pass?: string;
     token?: string;
   }) => {
-    const userId = crypto.randomUUID();
+    const savedUserId = localStorage.getItem("classroom_persisted_user_id");
+    const userId = savedUserId || crypto.randomUUID();
+    localStorage.setItem("classroom_persisted_user_id", userId);
+
     const cleanUrl = new URL(workerUrl);
     cleanUrl.searchParams.set("roomId", roomId);
     cleanUrl.searchParams.set("userId", userId);

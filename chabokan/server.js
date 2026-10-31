@@ -169,6 +169,20 @@ app.post("/api/lms/sessions", authenticateToken, requireRole("admin", "teacher")
   res.status(201).json(session);
 });
 
+function getFormattedInviteLink(roomId) {
+  try {
+    const hostRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_host'").get();
+    const portRow = db.prepare("SELECT value FROM server_config WHERE key = 'public_ws_port'").get();
+    const host = hostRow?.value || "";
+    const port = portRow?.value || "3000";
+    const portStr = port && port !== "80" && port !== "443" ? `:${port}` : "";
+    if (host) {
+      return `http://${host}${portStr}/?room=${roomId}`;
+    }
+  } catch (e) {}
+  return `/?room=${roomId}`;
+}
+
 // ==========================================
 // 2.5 Admin Room Creation & Management (UDP/WS Configurable)
 // ==========================================
@@ -201,7 +215,7 @@ app.post("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req,
       id: roomId,
       title: cleanTitle,
       transport: transportConfig,
-      inviteLink: `/?room=${roomId}`,
+      inviteLink: getFormattedInviteLink(roomId),
       createdAt: now,
     },
   });
@@ -217,7 +231,7 @@ app.get("/api/rooms", authenticateToken, requireRole("admin", "teacher"), (req, 
       id: r.id,
       title: r.title,
       transport,
-      inviteLink: `/?room=${r.id}`,
+      inviteLink: getFormattedInviteLink(r.id),
       activeUsers: activeRoom ? Object.keys(activeRoom.users).length : 0,
       createdAt: r.created_at,
     };
@@ -324,15 +338,21 @@ app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
         client.close();
-        results.udpReachable = true;
+        results.udpReachable = false;
+        results.udpError = `عدم دریافت پاسخ از پورت UDP ${udpPort}`;
         resolve();
       }, 1200);
 
-      client.on("message", () => {
-        clearTimeout(timer);
-        results.udpReachable = true;
-        client.close();
-        resolve();
+      client.on("message", (msg) => {
+        try {
+          const resObj = JSON.parse(msg.toString());
+          if (resObj && resObj.type === "PONG") {
+            clearTimeout(timer);
+            results.udpReachable = true;
+            client.close();
+            resolve();
+          }
+        } catch (e) {}
       });
 
       client.send(pingMsg, udpPort, targetHost === "localhost" ? "127.0.0.1" : targetHost, (err) => {
@@ -349,7 +369,8 @@ app.post("/api/config/test", authenticateToken, requireRole("admin"), async (req
   }
 
   results.latencyMs = Date.now() - startTime;
-  results.success = results.httpReachable || results.udpReachable;
+  // A test is ONLY successful if the HTTP/WS port is actually reachable!
+  results.success = results.httpReachable;
 
   res.json(results);
 });
